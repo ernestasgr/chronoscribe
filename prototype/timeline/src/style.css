@@ -59,3 +59,10 @@ i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-r
 .vc .topx td { padding: 4px; font-size: 14px; }
 .vc-chart { padding: 10px 16px; }
 .step .presets { display: inline-flex; margin-left: 2px; } .step .presets button { font-size: 11px; padding: 1px 5px; border-radius: 0; } .step .presets button.on { background: #4e79a7; color: #fff; border-color: #4e79a7; }
+.topx-anim { position: relative; }
+.topx-anim .row { position: absolute; left: 0; right: 0; height: 24px; display: flex; align-items: center; gap: 6px; transition: transform .45s cubic-bezier(.65,0,.35,1); animation: fadein .4s; padding: 0 4px; border-radius: 4px; }
+.topx-anim .row.hl { background: #4e79a722; }
+.topx-anim .r { color: #888; width: 28px; } .topx-anim .delta { width: 34px; font-size: 11px; } .topx-anim .name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topx-anim .num { width: 44px; text-align: right; color: #666; font-variant-numeric: tabular-nums; } .topx-anim .dp { width: 80px; color: #59a14f; font-size: 11px; }
+.topx-anim .bar { transition: width .35s ease; } .topx-anim .row:hover .pinbtn { opacity: 1; }
+@keyframes fadein { from { opacity: 0; } to { opacity: 1; } }

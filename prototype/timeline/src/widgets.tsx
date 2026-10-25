@@ -57,8 +57,8 @@ export function Play({ tl, big }: { tl: Timeline; big?: boolean }) {
   return (
     <span className="ctl">
       <button className={big ? "play big" : "play"} onClick={() => (tl.playing ? tl.setPlaying(false) : tl.startPlay())}>{tl.playing ? "❚❚" : "▶"}</button>
-      <select value={tl.speed} onChange={(e) => tl.setSpeed(+e.target.value)}>
-        {[2, 7, 15, 30, 60].map((s) => <option key={s} value={s}>{s} Days/s</option>)}
+      <select value={tl.secPerDay} onChange={(e) => tl.setSecPerDay(+e.target.value)} title="Seconds per Day">
+        {[0.02, 0.05, 0.1, 0.25, 0.5, 1, 2].map((s) => <option key={s} value={s}>{s} s/Day</option>)}
       </select>
     </span>
   );
@@ -88,6 +88,33 @@ export function TopXList({ tl, bars = true }: { tl: Timeline; bars?: boolean }) 
         })}
       </tbody>
     </table>
+  );
+}
+
+// Top X as absolutely positioned rows so Standing changes slide rows to their new place
+const ROW = 24;
+export function TopXAnimated({ tl }: { tl: Timeline }) {
+  const { t, focus } = tl;
+  const top = topX(t, focus, tl.x);
+  const max = Math.max(1, ...top.map((a) => dailyPlays(t, focus, a)));
+  return (
+    <div className="topx-anim" style={{ height: top.length * ROW }}>
+      {top.map((a, i) => {
+        const prev = focus ? t.standing[(focus - 1) * t.A + a] : 0;
+        const dp = dailyPlays(t, focus, a);
+        const delta = prev ? prev - (i + 1) : null;
+        return (
+          <div key={a} className={"row" + (tl.hover === a ? " hl" : "")} style={{ transform: `translateY(${i * ROW}px)` }} onMouseEnter={() => tl.setHover(a)} onMouseLeave={() => tl.setHover(null)}>
+            <span className="r">#{i + 1}</span>
+            <span className="delta">{delta == null ? <span className="new">NEW</span> : delta > 0 ? <span className="up">▲{delta}</span> : delta < 0 ? <span className="down">▼{-delta}</span> : ""}</span>
+            <span className="name"><i style={{ background: colorOf(a) }} />{t.artists[a]}</span>
+            <span className="num">{t.cum[focus * t.A + a]}</span>
+            <span className="dp"><span className="bar" style={{ width: (dp / max) * 50 }} />{dp ? `+${dp}` : ""}</span>
+            <button className="pinbtn" onClick={() => tl.togglePin(a)}>{tl.pinned.includes(a) ? "📌" : "pin"}</button>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -156,7 +183,7 @@ export function VolumeStrip({ tl, height = 44, focusMode }: { tl: Timeline; heig
     const [a, b] = tl.view;
     g.fillStyle = "rgba(78,121,167,.18)"; g.strokeStyle = "#4e79a7";
     g.fillRect((a / t.D) * w, 0, ((b - a) / t.D) * w, h); g.strokeRect((a / t.D) * w, 0.5, ((b - a) / t.D) * w, h - 1);
-    g.fillStyle = "#e15759"; g.fillRect((tl.focus / t.D) * w - 1, 0, 2, h);
+    g.fillStyle = "#e15759"; g.fillRect((tl.ph / t.D) * w - 1, 0, 2, h);
   });
   const toDay = (e: React.MouseEvent) => { const r = cv.current!.getBoundingClientRect(); return ((e.clientX - r.left) / r.width) * t.D; };
   const move = (e: React.MouseEvent) => {

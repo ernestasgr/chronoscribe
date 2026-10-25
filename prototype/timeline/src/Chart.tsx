@@ -15,11 +15,11 @@ export const CURVES: Record<string, { label: string; c: CurveFactory }> = {
   basis: { label: "smoothed (basis)", c: curveBasis },
 };
 export type Curve = keyof typeof CURVES;
-type Props = { tl: Timeline; height?: number | string; labels: "right" | "focus" | "none"; below: Below; dark?: boolean; curve?: Curve };
+type Props = { tl: Timeline; height?: number | string; labels: "right" | "focus" | "none"; below: Below; dark?: boolean; curve?: Curve; ghost?: boolean };
 
 const M = { l: 44, r: 150, t: 22, b: 26 };
 
-export function Chart({ tl, height = 480, labels, below, dark, curve = "linear" }: Props) {
+export function Chart({ tl, height = 480, labels, below, dark, curve = "linear", ghost = false }: Props) {
   const wrap = useRef<HTMLDivElement>(null);
   const cv = useRef<HTMLCanvasElement>(null);
   const zb = useRef<ZoomBehavior<HTMLCanvasElement, unknown>>(null);
@@ -28,7 +28,8 @@ export function Chart({ tl, height = 480, labels, below, dark, curve = "linear" 
   const tlRef = useRef(tl);
   tlRef.current = tl;
   const t = tl.t;
-  const right = labels === "right" ? M.r : 16;
+  const right = labels === "right" ? M.r : labels === "focus" ? 130 : 16;
+  const yMax = useRef(0); // eased y-domain max in Scrobbles mode
 
   // size
   useEffect(() => {
@@ -86,9 +87,13 @@ export function Chart({ tl, height = 480, labels, below, dark, curve = "linear" 
     let y: (a: number, d: number) => number | null;
     let yTicks: { v: string; y: number }[] = [];
     if (yMode === "cum") {
+      const { ph, playing } = tlRef.current;
+      const dEnd = Math.min(Math.ceil(view[1]), ghost ? Math.ceil(ph) + 1 : Infinity);
       let max = 1;
-      for (let d = Math.floor(view[0]); d <= Math.ceil(view[1]); d++) for (const a of drawn) max = Math.max(max, t.cum[d * t.A + a]);
-      const ys = scaleLinear().domain([0, max]).nice().range([bot, top]);
+      for (let d = Math.floor(view[0]); d <= dEnd; d++) for (const a of drawn) max = Math.max(max, t.cum[d * t.A + a]);
+      max *= 1.06;
+      yMax.current = playing && yMax.current ? yMax.current + (max - yMax.current) * 0.08 : max;
+      const ys = scaleLinear().domain([0, yMax.current]).range([bot, top]);
       y = (a, d) => ys(t.cum[d * t.A + a]);
       yTicks = ys.ticks(6).map((v) => ({ v: String(v), y: ys(v) }));
     } else if (below === "log") {
@@ -137,20 +142,27 @@ export function Chart({ tl, height = 480, labels, below, dark, curve = "linear" 
     g.fillStyle = mute;
     for (const d of tx.ticks(nT)) { const px = tx(d); g.fillText(fmt(d), px - 14, h - 8); }
 
-    // lines
-    g.save(); g.beginPath(); g.rect(M.l, top - 6, w - right - M.l, bot - top + 12); g.clip();
+    // lines: one pixel-space geometry per Artist, shared by the stroke and the gliding head
     const d0 = Math.max(0, Math.floor(view[0])), d1 = Math.min(t.D - 1, Math.ceil(view[1]));
     const step = Math.max(1, Math.floor((d1 - d0) / (w - right - M.l)));
-    const days: number[] = [];
-    for (let d = d0; d <= d1; d += step) days.push(d);
-    const path = line<number | null>().defined((v) => v != null).x((_, i) => xs(days[i])).y((v) => v!).curve(CURVES[curve].c);
-    const seg = line<[number, number]>().curve(CURVES[curve].c).context(g);
+    // Scrobbles change nearly every Day, so change points would merge into one giant S: sample Days and use a monotone curve
+    const sampled = curve === "linear" || yMode === "cum";
+    const seg = line<[number, number]>().curve(curve === "linear" ? curveLinear : yMode === "cum" ? curveMonotoneX : CURVES[curve].c);
     // Curved: keep only change points and give each change a transition at least MINW px wide,
     // since adjacent Days are often < 1px apart and any curve would collapse into a vertical jump.
     const MINW = 14;
-    const keypoints = (a: number) => {
+    const geometry = (a: number): [number, number][][] => {
       const out: [number, number][][] = [];
       let cur: [number, number][] = [];
+      if (sampled) {
+        for (let d = d0; d <= d1; d += step) {
+          const yy = y(a, d);
+          if (yy == null) { if (cur.length) out.push(cur); cur = []; continue; }
+          cur.push([xs(d), yy]);
+        }
+        if (cur.length) out.push(cur);
+        return out;
+      }
       let prev: number | null = null;
       for (let d = d0; d <= d1; d++) {
         const yy = y(a, d);
@@ -168,31 +180,73 @@ export function Chart({ tl, height = 480, labels, below, dark, curve = "linear" 
       if (cur.length) { if (prev != null) cur.push([Math.max(cur[cur.length - 1][0], xs(d1)), prev]); out.push(cur); }
       return out;
     };
-    const ordered = [...drawn].sort((a, b) => (a === hover ? 1 : b === hover ? -1 : 0));
-    for (const a of ordered) {
-      const isP = pinned.includes(a);
-      g.strokeStyle = colorOf(a);
-      g.globalAlpha = hover == null || hover === a ? 1 : 0.18;
-      g.lineWidth = a === hover ? 3 : isP ? 2.5 : 1.6;
-      g.setLineDash(isP && yMode === "standing" && t.standing[focus * t.A + a] > X ? [4, 3] : []);
-      g.beginPath();
-      if (curve === "linear") path.context(g)(days.map((d) => y(a, d)));
-      else for (const k of keypoints(a)) seg(k);
-      g.stroke();
-    }
-    g.setLineDash([]); g.globalAlpha = 1; g.restore();
+    // y of a geometry at pixel x: linear between samples, or along the bump curve's bezier
+    const yAt = (segs: [number, number][][], px: number): number | null => {
+      for (const sg of segs) {
+        if (px < sg[0][0] - 0.5 || px > sg[sg.length - 1][0] + 0.5) continue;
+        for (let i = 1; i < sg.length; i++) {
+          const [ax, ay] = sg[i - 1], [bx, by] = sg[i];
+          if (px > bx) continue;
+          if (bx === ax) return by;
+          if (sampled) return ay + ((by - ay) * (px - ax)) / (bx - ax);
+          let lo = 0, hi = 1; // bump: x(u) = ax + (bx-ax)(3u²-2u³)·… solve numerically
+          for (let k = 0; k < 18; k++) { const u = (lo + hi) / 2, m = (ax + bx) / 2; const xu = ax * (1 - u) ** 3 + 3 * m * (1 - u) ** 2 * u + 3 * m * (1 - u) * u * u + bx * u ** 3; xu < px ? (lo = u) : (hi = u); }
+          const u = (lo + hi) / 2;
+          return ay + (by - ay) * (3 * u * u - 2 * u * u * u);
+        }
+        return sg[sg.length - 1][1];
+      }
+      return null;
+    };
 
-    // focus marker
-    const fx = xs(focus);
-    if (fx >= M.l && fx <= w - right) {
-      g.strokeStyle = fg; g.lineWidth = 1; g.beginPath(); g.moveTo(fx, top - 8); g.lineTo(fx, bot); g.stroke();
-      g.fillStyle = fg; g.font = "bold 11px system-ui"; g.fillText(t.days[focus], Math.min(fx - 30, w - right - 64), 12);
+    const { ph } = tlRef.current;
+    const px = xs(ph);
+    const clipL = M.l, clipR = w - right;
+    const split = Math.max(clipL, Math.min(clipR, px));
+    const geo = new Map<number, [number, number][][]>();
+    for (const a of drawn) geo.set(a, geometry(a));
+    const ordered = [...drawn].sort((a, b) => (a === hover ? 1 : b === hover ? -1 : 0));
+    const strokeAll = (alphaMul: number, x0: number, x1: number) => {
+      if (x1 <= x0) return;
+      g.save(); g.beginPath(); g.rect(x0, top - 6, x1 - x0, bot - top + 12); g.clip();
+      for (const a of ordered) {
+        const isP = pinned.includes(a);
+        g.strokeStyle = colorOf(a);
+        g.globalAlpha = (hover == null || hover === a ? 1 : 0.18) * alphaMul;
+        g.lineWidth = a === hover ? 3 : isP ? 2.5 : 1.8;
+        g.setLineDash(isP && yMode === "standing" && t.standing[focus * t.A + a] > X ? [4, 3] : []);
+        g.beginPath();
+        for (const sg of geo.get(a)!) seg.context(g)(sg);
+        g.stroke();
+      }
+      g.restore();
+    };
+    if (ghost) { strokeAll(1, clipL, split); strokeAll(0.12, split, clipR); }
+    else strokeAll(1, clipL, clipR);
+    g.setLineDash([]); g.globalAlpha = 1;
+
+    // playhead: line, date, gliding dots and de-overlapped labels
+    if (px >= clipL - 1 && px <= clipR + 1) {
+      g.strokeStyle = fg; g.lineWidth = 1; g.beginPath(); g.moveTo(px, top - 8); g.lineTo(px, bot); g.stroke();
+      g.fillStyle = fg; g.font = "bold 11px system-ui"; g.fillText(t.days[focus], Math.max(clipL, Math.min(px - 30, clipR - 64)), 12);
+      const heads: { a: number; y: number; label: boolean }[] = [];
       for (const a of drawn) {
-        const yy = y(a, focus);
-        if (yy == null || yy > bot + 1) continue;
-        g.fillStyle = colorOf(a); g.beginPath(); g.arc(fx, yy, a === hover ? 5 : 3, 0, 7); g.fill();
-        if (labels === "focus" && (yMode === "cum" || t.standing[focus * t.A + a] <= X || pinned.includes(a))) {
-          g.font = "11px system-ui"; g.fillStyle = fg; g.fillText(t.artists[a], fx + 7, yy + 4);
+        const yy = yAt(geo.get(a)!, px);
+        if (yy == null || yy > bot + 2 || yy < top - 8) continue;
+        const inTop = t.standing[focus * t.A + a] > 0 && t.standing[focus * t.A + a] <= X;
+        heads.push({ a, y: yy, label: inTop || pinned.includes(a) });
+      }
+      for (const hd of heads) { g.fillStyle = colorOf(hd.a); g.beginPath(); g.arc(px, hd.y, hd.a === hover ? 5.5 : 3.5, 0, 7); g.fill(); }
+      if (labels === "focus") {
+        const ls = heads.filter((hd) => hd.label).sort((p, q) => p.y - q.y);
+        let last = -1e9;
+        g.font = "600 11px system-ui";
+        for (const hd of ls) {
+          const ly = Math.max(hd.y, last + 13); last = ly;
+          g.fillStyle = dark ? "#141414cc" : "#ffffffcc";
+          const tw = g.measureText(t.artists[hd.a]).width;
+          g.fillRect(px + 7, ly - 8, tw + 6, 14);
+          g.fillStyle = colorOf(hd.a); g.fillText(t.artists[hd.a], px + 10, ly + 3);
         }
       }
     }

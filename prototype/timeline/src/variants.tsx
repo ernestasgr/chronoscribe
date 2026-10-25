@@ -5,7 +5,7 @@
 import { useState } from "react";
 import { CURVES, Chart, type Below, type Curve } from "./Chart";
 import { fmtDay, useDrawnCount, type Timeline } from "./state";
-import { Climbers, PinnedChips, Play, Search, StepControl, StepDay, TopXList, VolumeStrip, XSetting, YSwitch, type ClimberMode } from "./widgets";
+import { Climbers, PinnedChips, Play, Search, StepControl, StepDay, TopXAnimated, TopXList, VolumeStrip, XSetting, YSwitch, type ClimberMode } from "./widgets";
 
 function BelowSelect({ v, set }: { v: Below; set: (b: Below) => void }) {
   return (
@@ -24,6 +24,7 @@ export function VariantA({ tl }: { tl: Timeline }) {
   const [below, setBelow] = useState<Below>("clip");
   const [cm, setCm] = useState<ClimberMode>("collapse");
   const [curve, setCurve] = useState<Curve>("bump");
+  const [ghost, setGhost] = useState(true);
   const n = useDrawnCount(tl);
   return (
     <div className="va">
@@ -39,6 +40,7 @@ export function VariantA({ tl }: { tl: Timeline }) {
             {Object.entries(CURVES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
           </select>
         </label>
+        <label className="ctl"><input type="checkbox" checked={ghost} onChange={(e) => setGhost(e.target.checked)} /> ghost future</label>
         <StepControl tl={tl} />
         <Play tl={tl} />
         <span className="muted">{n} lines</span>
@@ -46,7 +48,7 @@ export function VariantA({ tl }: { tl: Timeline }) {
       <PinnedChips tl={tl} />
       <div className="va-body">
         <main>
-          <Chart tl={tl} labels="right" below={below} curve={curve} height="calc(100vh - 230px)" />
+          <Chart tl={tl} labels="focus" below={below} curve={curve} ghost={ghost} height="calc(100vh - 230px)" />
           <VolumeStrip tl={tl} />
           <p className="muted">Scroll to zoom · drag to pan · click to set the Focus Day · , / . step by the step size · space plays</p>
         </main>
@@ -54,7 +56,7 @@ export function VariantA({ tl }: { tl: Timeline }) {
           <h2>{fmtDay(tl.t.days[tl.focus])}</h2>
           <p className="muted">{tl.t.total[tl.focus]} Scrobbles this Day</p>
           <h3>Top {tl.x}</h3>
-          <TopXList tl={tl} />
+          <TopXAnimated tl={tl} />
           <h3>Climbers</h3>
           <Climbers tl={tl} mode={cm} setMode={setCm} />
         </aside>

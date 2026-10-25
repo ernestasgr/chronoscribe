@@ -13,4 +13,6 @@ Needs the local history dump from "Pull my history locally and measure its shape
 - **B Player**: full-bleed dark chart, video-style transport and scrubber, floating Top X card, Climbers ticker. Artists below the Top X go in a compressed gutter.
 - **C Leaderboard**: Focus Day leaderboard first, chart as context with direct labels. Artists below the Top X use a log axis.
 
-Keys: `,` `.` step a Day, space plays.
+Variant A is the front-runner: S-curve lines, N-Day stepping, and a player mode. Playback is set in seconds per Day: the playhead glides at 80% of the window while the chart scrolls, the future is ghosted, dots and labels ride the lines, and Top X rows slide to their new Standings. Clicks and steps glide too.
+
+Keys: `,` `.` step by the step size, space plays.
