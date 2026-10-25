@@ -1,0 +1,3 @@
+node_modules/
+# Personal listening history: generated locally by `npm run data`, never committed.
+public/data.json

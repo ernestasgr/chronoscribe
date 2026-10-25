@@ -1,0 +1,60 @@
+/* PROTOTYPE styles: plain CSS, not the real Tailwind/shadcn look */
+* { box-sizing: border-box; }
+body { margin: 0; font: 13px/1.35 system-ui, sans-serif; color: #222; background: #fafafa; }
+button, select, input { font: inherit; }
+button { cursor: pointer; border: 1px solid #ccc; background: #fff; border-radius: 6px; padding: 3px 8px; }
+input, select { border: 1px solid #ccc; border-radius: 6px; padding: 3px 6px; background: #fff; }
+.muted { color: #888; }
+h1 { font-size: 16px; margin: 0; } h2 { font-size: 16px; margin: 0 0 2px; } h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: #888; margin: 14px 0 4px; }
+i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: middle; }
+.ctl { display: inline-flex; gap: 4px; align-items: center; }
+.seg { display: inline-flex; } .seg button { border-radius: 0; } .seg button:first-child { border-radius: 6px 0 0 6px; } .seg button:last-child { border-radius: 0 6px 6px 0; }
+.seg button.on { background: #4e79a7; color: #fff; border-color: #4e79a7; }
+.seg.small button { font-size: 11px; padding: 1px 6px; }
+.search { position: relative; } .search input { width: 220px; }
+.hits { position: absolute; z-index: 20; top: 100%; left: 0; margin: 2px 0 0; padding: 4px 0; list-style: none; background: #fff; border: 1px solid #ccc; border-radius: 6px; width: 300px; box-shadow: 0 4px 12px #0002; color: #222; }
+.hits li { padding: 3px 8px; cursor: pointer; } .hits li:hover { background: #eef; } .hits small { color: #999; float: right; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; } .chip { border: 2px solid; border-radius: 12px; padding: 1px 4px 1px 8px; background: #fff; color: #222; }
+.chip button { border: 0; background: none; padding: 0 4px; }
+.topx { border-collapse: collapse; width: 100%; } .topx td { padding: 2px 4px; white-space: nowrap; } .topx tr.hl { background: #4e79a722; }
+.topx .r { color: #888; width: 30px; } .topx .num { text-align: right; color: #666; font-variant-numeric: tabular-nums; } .topx .delta { width: 38px; font-size: 11px; }
+.topx .dp { width: 90px; color: #59a14f; font-size: 11px; } .bar { display: inline-block; height: 7px; background: #59a14f; margin-right: 3px; border-radius: 2px; vertical-align: middle; }
+.pinbtn { font-size: 10px; padding: 0 4px; opacity: .5; } tr:hover .pinbtn { opacity: 1; }
+.up { color: #59a14f; } .down { color: #e15759; } .new { background: #edc948; color: #222; font-size: 10px; border-radius: 3px; padding: 0 3px; margin-left: 4px; }
+.climbers ul { list-style: none; margin: 4px 0; padding: 0; } .climbers li { padding: 2px 0; cursor: pointer; display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.climbers li.hl { background: #4e79a722; } .climbers .gain { color: #59a14f; font-weight: 600; } .climbers small { color: #999; } .climbers .empty { color: #999; font-style: italic; cursor: default; }
+.climbers .tail button { border: 0; background: none; color: #666; padding: 0; } .climbers .tail ul { opacity: .75; }
+.proto-switch { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); z-index: 100; background: #111; color: #fff; border-radius: 999px; padding: 5px 8px; display: flex; gap: 10px; align-items: center; box-shadow: 0 6px 20px #0006; font-weight: 600; }
+.proto-switch button { background: #333; color: #fff; border: 0; border-radius: 999px; }
+
+/* A dashboard */
+.va header { display: flex; gap: 12px; align-items: center; padding: 10px 16px; background: #fff; border-bottom: 1px solid #e5e5e5; flex-wrap: wrap; }
+.va .chips { padding: 6px 16px 0; }
+.va-body { display: grid; grid-template-columns: 1fr 360px; gap: 12px; padding: 8px 16px; }
+.va main { background: #fff; border: 1px solid #e5e5e5; border-radius: 8px; padding: 6px; } .va main p { margin: 4px 6px; font-size: 11px; }
+.va aside { background: #fff; border: 1px solid #e5e5e5; border-radius: 8px; padding: 12px; overflow: auto; max-height: calc(100vh - 110px); }
+
+/* B player */
+.vb { background: #141414; color: #ddd; height: 100vh; position: relative; overflow: hidden; }
+.vb button, .vb select, .vb input { background: #262626; color: #ddd; border-color: #3a3a3a; }
+.vb .seg button.on { background: #4e79a7; }
+.vb-top { display: flex; align-items: center; gap: 16px; padding: 8px 14px; }
+.vb .brand { font-weight: 700; letter-spacing: .04em; }
+.vb-climb { flex: 1; display: flex; gap: 10px; align-items: center; overflow: hidden; }
+.vb-climb .climbers { display: flex; gap: 10px; align-items: center; } .vb-climb .climbers ul { display: flex; gap: 12px; margin: 0; } .vb-climb .climbers li { flex-wrap: nowrap; white-space: nowrap; }
+.vb-climb .climbers .tail { display: none; }
+.vb-gear { position: absolute; right: 14px; top: 44px; z-index: 30; background: #1f1f1f; border: 1px solid #333; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 10px; width: 300px; }
+.vb-card { position: absolute; left: 60px; top: 60px; background: #1f1f1fe8; border: 1px solid #333; border-radius: 8px; padding: 8px 10px; width: 330px; }
+.vb-card .x { position: absolute; right: 6px; top: 4px; border: 0; background: none; }
+.vb .topx tr.hl { background: #ffffff18; } .vb .topx .num { color: #999; } .vb .chip { background: #262626; color: #ddd; }
+.vb-transport { position: absolute; left: 0; right: 0; bottom: 0; height: 96px; padding: 10px 16px 50px; display: flex; gap: 14px; align-items: center; background: linear-gradient(#14141400, #000 40%); }
+.vb .play.big { font-size: 18px; width: 40px; height: 40px; border-radius: 50%; }
+.vb-date { font-size: 18px; font-weight: 600; min-width: 170px; font-variant-numeric: tabular-nums; }
+
+/* C leaderboard */
+.vc { display: grid; grid-template-columns: 400px 1fr; height: 100vh; }
+.vc-board { background: #fff; border-right: 1px solid #e5e5e5; padding: 16px; overflow: auto; }
+.vc-date { display: flex; align-items: center; gap: 10px; justify-content: space-between; margin-bottom: 10px; } .vc-date h1 { font-size: 22px; } .vc-date > div { text-align: center; }
+.vc .row { display: flex; gap: 12px; align-items: center; margin: 6px 0; }
+.vc .topx td { padding: 4px; font-size: 14px; }
+.vc-chart { padding: 10px 16px; }
