@@ -172,13 +172,25 @@ export function VolumeStrip({ tl, height = 44, focusMode }: { tl: Timeline; heig
   );
 }
 
+export function StepControl({ tl }: { tl: Timeline }) {
+  return (
+    <span className="ctl step">
+      <button onClick={() => tl.stepBy(-tl.stepSize)} title="Back (,)">◀</button>
+      <input type="number" min={1} max={365} value={tl.stepSize} onChange={(e) => tl.setStepSize(Math.max(1, Math.min(365, +e.target.value || 1)))} style={{ width: 52 }} />
+      <span>Day{tl.stepSize === 1 ? "" : "s"}</span>
+      <button onClick={() => tl.stepBy(tl.stepSize)} title="Forward (.)">▶</button>
+      <span className="presets">{[1, 7, 30, 365].map((n) => <button key={n} className={tl.stepSize === n ? "on" : ""} onClick={() => tl.setStepSize(n)}>{n === 365 ? "1y" : n === 30 ? "30d" : n === 7 ? "1w" : "1d"}</button>)}</span>
+    </span>
+  );
+}
+
 export function StepDay({ tl }: { tl: Timeline }) {
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
       const el = document.activeElement as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "SELECT")) return;
-      if (e.key === "," || e.key === "j") tl.setFocus(tl.focus - 1);
-      if (e.key === "." || e.key === "k") tl.setFocus(tl.focus + 1);
+      if (e.key === "," || e.key === "j") tl.stepBy(-tl.stepSize);
+      if (e.key === "." || e.key === "k") tl.stepBy(tl.stepSize);
       if (e.key === " ") { e.preventDefault(); tl.playing ? tl.setPlaying(false) : tl.startPlay(); }
     };
     addEventListener("keydown", k);

@@ -58,3 +58,4 @@ i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-r
 .vc .row { display: flex; gap: 12px; align-items: center; margin: 6px 0; }
 .vc .topx td { padding: 4px; font-size: 14px; }
 .vc-chart { padding: 10px 16px; }
+.step .presets { display: inline-flex; margin-left: 2px; } .step .presets button { font-size: 11px; padding: 1px 5px; border-radius: 0; } .step .presets button.on { background: #4e79a7; color: #fff; border-color: #4e79a7; }

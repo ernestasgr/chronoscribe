@@ -13,6 +13,7 @@ export function useTimeline(t: Tables) {
   const [hover, setHover] = useState<number | null>(null);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(15); // Days per second
+  const [stepSize, setStepSize] = useState(1); // Days per manual step
 
   const setFocus = (d: number) => setFocusRaw(Math.max(0, Math.min(t.D - 1, d)));
 
@@ -37,13 +38,25 @@ export function useTimeline(t: Tables) {
     return () => clearInterval(id);
   }, [playing, speed]);
 
+  // manual step: move the Focus Day by n Days, paging the view when it leaves the window
+  const stepBy = (n: number) => {
+    const f = Math.max(0, Math.min(t.D - 1, focus + n));
+    setFocusRaw(f);
+    setView(([a, b]) => {
+      if (f >= a && f <= b) return [a, b];
+      const span = b - a;
+      const na = Math.max(0, Math.min(t.D - 1 - span, n > 0 ? f - span * 0.85 : f - span * 0.15));
+      return [na, na + span];
+    });
+  };
+
   const startPlay = () => {
     if (focus >= t.D - 1) { setFocusRaw(Math.round(view[0])); }
     setPlaying(true);
   };
 
   return {
-    t, x, setX, yMode, setYMode, focus, setFocus, view, setView, pinned, hover, setHover, playing, setPlaying, startPlay, speed, setSpeed,
+    t, x, setX, yMode, setYMode, focus, setFocus, view, setView, pinned, hover, setHover, playing, setPlaying, startPlay, speed, setSpeed, stepSize, setStepSize, stepBy,
     pin: (a: number) => setPinned((p) => (p.includes(a) ? p : [...p, a])),
     unpin: (a: number) => setPinned((p) => p.filter((q) => q !== a)),
     togglePin: (a: number) => setPinned((p) => (p.includes(a) ? p.filter((q) => q !== a) : [...p, a])),

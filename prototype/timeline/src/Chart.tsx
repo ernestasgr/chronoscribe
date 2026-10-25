@@ -3,14 +3,23 @@ import { useEffect, useRef } from "react";
 import { scaleLinear, scaleLog, scaleUtc } from "d3-scale";
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, type ZoomBehavior } from "d3-zoom";
+import { curveBasis, curveBumpX, curveCatmullRom, curveLinear, curveMonotoneX, line, type CurveFactory } from "d3-shape";
 import { type Timeline, colorOf, drawnSet } from "./state";
 
 export type Below = "clip" | "gutter" | "log";
-type Props = { tl: Timeline; height?: number | string; labels: "right" | "focus" | "none"; below: Below; dark?: boolean };
+export const CURVES: Record<string, { label: string; c: CurveFactory }> = {
+  linear: { label: "straight", c: curveLinear },
+  bump: { label: "bump (S-curves)", c: curveBumpX },
+  monotone: { label: "monotone", c: curveMonotoneX },
+  catmull: { label: "Catmull-Rom", c: curveCatmullRom.alpha(0.5) },
+  basis: { label: "smoothed (basis)", c: curveBasis },
+};
+export type Curve = keyof typeof CURVES;
+type Props = { tl: Timeline; height?: number | string; labels: "right" | "focus" | "none"; below: Below; dark?: boolean; curve?: Curve };
 
 const M = { l: 44, r: 150, t: 22, b: 26 };
 
-export function Chart({ tl, height = 480, labels, below, dark }: Props) {
+export function Chart({ tl, height = 480, labels, below, dark, curve = "linear" }: Props) {
   const wrap = useRef<HTMLDivElement>(null);
   const cv = useRef<HTMLCanvasElement>(null);
   const zb = useRef<ZoomBehavior<HTMLCanvasElement, unknown>>(null);
@@ -132,6 +141,33 @@ export function Chart({ tl, height = 480, labels, below, dark }: Props) {
     g.save(); g.beginPath(); g.rect(M.l, top - 6, w - right - M.l, bot - top + 12); g.clip();
     const d0 = Math.max(0, Math.floor(view[0])), d1 = Math.min(t.D - 1, Math.ceil(view[1]));
     const step = Math.max(1, Math.floor((d1 - d0) / (w - right - M.l)));
+    const days: number[] = [];
+    for (let d = d0; d <= d1; d += step) days.push(d);
+    const path = line<number | null>().defined((v) => v != null).x((_, i) => xs(days[i])).y((v) => v!).curve(CURVES[curve].c);
+    const seg = line<[number, number]>().curve(CURVES[curve].c).context(g);
+    // Curved: keep only change points and give each change a transition at least MINW px wide,
+    // since adjacent Days are often < 1px apart and any curve would collapse into a vertical jump.
+    const MINW = 14;
+    const keypoints = (a: number) => {
+      const out: [number, number][][] = [];
+      let cur: [number, number][] = [];
+      let prev: number | null = null;
+      for (let d = d0; d <= d1; d++) {
+        const yy = y(a, d);
+        if (yy == null) { if (cur.length) out.push(cur); cur = []; prev = null; continue; }
+        if (prev == null) { cur.push([xs(d), yy]); prev = yy; continue; }
+        if (Math.abs(yy - prev) > 0.5) {
+          const x0 = xs(d - 1), x1 = xs(d), mid = (x0 + x1) / 2, hw = Math.max((x1 - x0) / 2, MINW / 2);
+          const last = cur[cur.length - 1];
+          if (mid - hw > last[0] + 0.5) cur.push([mid - hw, prev]);
+          else if (cur.length > 1) cur.pop(); // overlapping transitions: curve straight on to the next level
+          cur.push([mid + hw, yy]);
+          prev = yy;
+        }
+      }
+      if (cur.length) { if (prev != null) cur.push([Math.max(cur[cur.length - 1][0], xs(d1)), prev]); out.push(cur); }
+      return out;
+    };
     const ordered = [...drawn].sort((a, b) => (a === hover ? 1 : b === hover ? -1 : 0));
     for (const a of ordered) {
       const isP = pinned.includes(a);
@@ -140,13 +176,8 @@ export function Chart({ tl, height = 480, labels, below, dark }: Props) {
       g.lineWidth = a === hover ? 3 : isP ? 2.5 : 1.6;
       g.setLineDash(isP && yMode === "standing" && t.standing[focus * t.A + a] > X ? [4, 3] : []);
       g.beginPath();
-      let pen = false;
-      for (let d = d0; d <= d1; d += step) {
-        const yy = y(a, d);
-        if (yy == null) { pen = false; continue; }
-        pen ? g.lineTo(xs(d), yy) : g.moveTo(xs(d), yy);
-        pen = true;
-      }
+      if (curve === "linear") path.context(g)(days.map((d) => y(a, d)));
+      else for (const k of keypoints(a)) seg(k);
       g.stroke();
     }
     g.setLineDash([]); g.globalAlpha = 1; g.restore();

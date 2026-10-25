@@ -3,9 +3,9 @@
 //  B Player      — full-bleed dark chart, video-player transport, floating Focus Day card.  Below-the-Top-X: compressed gutter.
 //  C Leaderboard — Focus Day leaderboard is primary, chart is context with direct labels.  Below-the-Top-X: log axis.
 import { useState } from "react";
-import { Chart, type Below } from "./Chart";
+import { CURVES, Chart, type Below, type Curve } from "./Chart";
 import { fmtDay, useDrawnCount, type Timeline } from "./state";
-import { Climbers, PinnedChips, Play, Search, StepDay, TopXList, VolumeStrip, XSetting, YSwitch, type ClimberMode } from "./widgets";
+import { Climbers, PinnedChips, Play, Search, StepControl, StepDay, TopXList, VolumeStrip, XSetting, YSwitch, type ClimberMode } from "./widgets";
 
 function BelowSelect({ v, set }: { v: Below; set: (b: Below) => void }) {
   return (
@@ -23,6 +23,7 @@ function BelowSelect({ v, set }: { v: Below; set: (b: Below) => void }) {
 export function VariantA({ tl }: { tl: Timeline }) {
   const [below, setBelow] = useState<Below>("clip");
   const [cm, setCm] = useState<ClimberMode>("collapse");
+  const [curve, setCurve] = useState<Curve>("bump");
   const n = useDrawnCount(tl);
   return (
     <div className="va">
@@ -33,15 +34,21 @@ export function VariantA({ tl }: { tl: Timeline }) {
         <XSetting tl={tl} />
         <YSwitch tl={tl} />
         <BelowSelect v={below} set={setBelow} />
+        <label className="ctl">lines:
+          <select value={curve} onChange={(e) => setCurve(e.target.value as Curve)}>
+            {Object.entries(CURVES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+        </label>
+        <StepControl tl={tl} />
         <Play tl={tl} />
         <span className="muted">{n} lines</span>
       </header>
       <PinnedChips tl={tl} />
       <div className="va-body">
         <main>
-          <Chart tl={tl} labels="right" below={below} height="calc(100vh - 230px)" />
+          <Chart tl={tl} labels="right" below={below} curve={curve} height="calc(100vh - 230px)" />
           <VolumeStrip tl={tl} />
-          <p className="muted">Scroll to zoom · drag to pan · click to set the Focus Day · , / . step a Day · space plays</p>
+          <p className="muted">Scroll to zoom · drag to pan · click to set the Focus Day · , / . step by the step size · space plays</p>
         </main>
         <aside>
           <h2>{fmtDay(tl.t.days[tl.focus])}</h2>
