@@ -1,0 +1,38 @@
+# Chronoscribe
+
+Personal data visualizations of one listener's last.fm listening history.
+
+## Language
+
+**Scrobble**:
+One recorded play of one track, as logged by last.fm.
+_Avoid_: Play, listen, stream
+
+**Day**:
+A calendar day in the listener's chosen timezone, one timezone for the whole history. The timeline's Days run from the Day of the first Scrobble through today, including Days with no Scrobbles.
+_Avoid_: Date (when meaning the bucket), UTC day
+
+**Standing**:
+An artist's rank by cumulative Scrobble count from the start of the history through the end of a given Day. Equal counts are ordered by which artist reached that count first (the earlier Scrobble that brought them to it), then by name. An Artist has no Standing (is unranked) before their first Scrobble.
+_Avoid_: Position, place, cumulative rank
+
+**Artist**:
+An artist exactly as named by last.fm; differently spelled names are different Artists.
+
+**Top X**:
+The X artists with the best Standings on a given Day, where X is a chart setting.
+
+**Daily plays**:
+An artist's Scrobble count within a single Day, not cumulative.
+_Avoid_: Day count, daily scrobbles
+
+**Climber**:
+Any Artist, in or out of the Top X, whose Standing improved since the previous Day, ranked by positions gained. An Artist debuting that Day counts as climbing from just below the last ranked Artist of the previous Day.
+_Avoid_: Mover, riser
+
+**Focus Day**:
+The single Day the timeline is currently inspecting; its Top X, Daily plays and Climbers are what the chart reports on.
+_Avoid_: Selected date, current day
+
+**Pinned Artist**:
+An Artist the listener has chosen to keep visible on the timeline regardless of whether it is in the Top X.
