@@ -43,6 +43,20 @@ function throttle(deps: IngestDeps): Promise<void> {
   return state.turn;
 }
 
+type ScrobblesChangedListener = (listenerId: string) => void;
+
+const scrobblesChangedListeners = new Set<ScrobblesChangedListener>();
+
+/** Calls `listener` with a Listener's id whenever ingest has committed a change to their Scrobbles. */
+export function onScrobblesChanged(listener: ScrobblesChangedListener): () => void {
+  scrobblesChangedListeners.add(listener);
+  return () => scrobblesChangedListeners.delete(listener);
+}
+
+function emitScrobblesChanged(id: string): void {
+  for (const listener of scrobblesChangedListeners) listener(id);
+}
+
 export interface ImportOptions {
   signal?: AbortSignal;
   onProgress?: (progress: ImportProgress) => void;
@@ -86,4 +100,6 @@ export async function importListener(
     if (result.scrobbles.length === 0 || page >= result.totalPages) break;
   }
   await db.updateListener(id, { importComplete: true });
+  // One event for the whole import: its history is only shown once it is complete.
+  emitScrobblesChanged(id);
 }

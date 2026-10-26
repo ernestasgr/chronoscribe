@@ -8,7 +8,7 @@ import {
   type FixtureUser,
 } from "../../test-support/lastfm";
 import { openDb, type Db } from "../db";
-import { importListener } from ".";
+import { importListener, onScrobblesChanged } from ".";
 
 const API_KEY = "fixture-key";
 const NOW = Date.parse("2026-07-10T12:00:00Z");
@@ -110,5 +110,19 @@ describe("importListener", () => {
     await expect(importing).rejects.toMatchObject({ name: "AbortError" });
     expect(requests).toHaveLength(1);
     expect(await db.listener("bristol")).toMatchObject({ importComplete: false });
+  });
+
+  test("emits scrobblesChanged once the imported Scrobbles are stored", async () => {
+    const { deps } = fakeTransport([user]);
+    const seen: { listenerId: string; stored: number }[] = [];
+    const unsubscribe = onScrobblesChanged(async (listenerId) => {
+      seen.push({ listenerId, stored: (await db.scrobblesOf(listenerId)).length });
+    });
+    try {
+      await importListener(db, { username: "Bristol", apiKey: API_KEY, timeZone: "UTC" }, deps);
+      await expect.poll(() => seen).toEqual([{ listenerId: "bristol", stored: 2100 }]);
+    } finally {
+      unsubscribe();
+    }
   });
 });

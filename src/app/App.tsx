@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { listenerId, type Db, type ListenerRow } from "../db";
 import { importListener, type ImportProgress } from "../ingest";
 import { dayDate, topX } from "../standings";
-import { rebuild, useTables } from "../timeline";
+import { showListener, useTables } from "../timeline";
 import { useSettings } from "./settings";
 
 type Screen =
@@ -17,7 +17,7 @@ export function App({ db, initialListener }: { db: Db; initialListener: Listener
 
   const listener = screen.kind === "dashboard" ? screen.listener : undefined;
   useEffect(() => {
-    if (listener) void rebuild(listener.id, listener.timeZone);
+    if (listener) showListener(listener);
   }, [listener]);
 
   async function addListener(username: string, apiKey: string) {
