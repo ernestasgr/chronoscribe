@@ -22,13 +22,17 @@ export interface ListenerRow {
   lastViewedAt: number;
 }
 
+/** fold long tail / within Top max(50, 5X) / all (raw) */
+export type ClimbersMode = "fold" | "within" | "all";
+
 export interface AppSettings {
   apiKey: string;
   /** How many Artists the Top X shows. */
   x: number;
+  climbers: ClimbersMode;
 }
 
-export const DEFAULT_SETTINGS: AppSettings = { apiKey: "", x: 10 };
+export const DEFAULT_SETTINGS: AppSettings = { apiKey: "", x: 10, climbers: "fold" };
 
 const SETTINGS_ID = "app";
 

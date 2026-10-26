@@ -13,5 +13,5 @@ export const useSettings = create<SettingsState>()((set) => ({
 /** Loads the settings from Dexie, then writes every later change back to it. */
 export async function hydrateSettings(db: Db): Promise<void> {
   useSettings.setState(await db.loadSettings());
-  useSettings.subscribe(({ apiKey, x }) => void db.saveSettings({ apiKey, x }));
+  useSettings.subscribe(({ apiKey, x, climbers }) => void db.saveSettings({ apiKey, x, climbers }));
 }

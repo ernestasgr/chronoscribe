@@ -1,3 +1,5 @@
+import type { ClimbersMode } from "../db";
+
 /** The Standing stored for an Artist who has no Scrobbles yet on a Day. */
 export const UNRANKED = 0xffff;
 
@@ -15,13 +17,14 @@ export interface StandingsTables {
 }
 
 export interface TopXRow {
+  id: number;
   artist: string;
   standing: number;
   cumulative: number;
 }
 
 const DAY_SECONDS = 86_400;
-// Every IANA offset is a multiple of 15 minutes, so a whole quarter-hour shares one local date.
+// Local dates are cached per quarter-hour: every modern offset is a whole number of them.
 const QUARTER_HOUR = 900;
 
 function dayIndexer(timeZone: string) {
@@ -31,16 +34,19 @@ function dayIndexer(timeZone: string) {
     month: "2-digit",
     day: "2-digit",
   });
+  const epochDayAt = (uts: number) => Date.parse(format.format(uts * 1000)) / 1000 / DAY_SECONDS;
+  // Each quarter-hour's local date, or NaN for one that straddles local midnight.
   const cache = new Map<number, number>();
   // Days since the Unix epoch of the local calendar date holding `uts`.
   return (uts: number): number => {
     const quarter = Math.floor(uts / QUARTER_HOUR);
     let epochDay = cache.get(quarter);
     if (epochDay === undefined) {
-      epochDay = Date.parse(format.format(quarter * QUARTER_HOUR * 1000)) / 1000 / DAY_SECONDS;
+      const start = epochDayAt(quarter * QUARTER_HOUR);
+      epochDay = start === epochDayAt((quarter + 1) * QUARTER_HOUR - 1) ? start : Number.NaN;
       cache.set(quarter, epochDay);
     }
-    return epochDay;
+    return Number.isNaN(epochDay) ? epochDayAt(uts) : epochDay;
   };
 }
 
@@ -138,12 +144,121 @@ export function topX(tables: StandingsTables, day: number, x: number): TopXRow[]
     const id = tables.rankOrder[base + rank]!;
     if (id === UNRANKED) break;
     rows.push({
+      id,
       artist: tables.artists[id]!,
       standing: rank + 1,
       cumulative: tables.cumulative[base + id]!,
     });
   }
   return rows;
+}
+
+/** An Artist's Scrobbles within `day`. */
+export function dailyPlays(tables: StandingsTables, day: number, artist: number): number {
+  const artistCount = tables.artists.length;
+  const today = tables.cumulative[day * artistCount + artist]!;
+  return day === 0 ? today : today - tables.cumulative[(day - 1) * artistCount + artist]!;
+}
+
+/** Every Scrobble within `day`, across all Artists. */
+export function dayScrobbles(tables: StandingsTables, day: number): number {
+  let total = 0;
+  for (let artist = 0; artist < tables.artists.length; artist++)
+    total += dailyPlays(tables, day, artist);
+  return total;
+}
+
+export interface Climber {
+  id: number;
+  artist: string;
+  standing: number;
+  /** The previous Day's Standing, or undefined for a debut. */
+  previous: number | undefined;
+  gain: number;
+  debut: boolean;
+  dailyPlays: number;
+}
+
+export type { ClimbersMode };
+
+export interface ClimbersReport {
+  listed: Climber[];
+  /** In "fold" mode, the Climbers finishing beyond Top `beyond`, when there are any. */
+  folded?: { climbers: Climber[]; beyond: number; singlePlay: number };
+}
+
+/** Where Climbers stop being listed outside "all" mode: Top max(50, 5X). */
+export const climbersCut = (x: number): number => Math.max(50, 5 * x);
+
+/**
+ * The Artists whose Standing improved since the previous Day, most positions gained first.
+ * A debut climbs from just below the previous Day's last ranked Artist.
+ */
+export function climbers(
+  tables: StandingsTables,
+  day: number,
+  mode: ClimbersMode,
+  x: number,
+): ClimbersReport {
+  if (day === 0) return { listed: [] };
+  const artistCount = tables.artists.length;
+  const base = day * artistCount;
+  const previousBase = base - artistCount;
+  let previouslyRanked = 0;
+  while (
+    previouslyRanked < artistCount &&
+    tables.rankOrder[previousBase + previouslyRanked] !== UNRANKED
+  )
+    previouslyRanked++;
+
+  const rows: Climber[] = [];
+  for (let id = 0; id < artistCount; id++) {
+    const standing = tables.standing[base + id]!;
+    if (standing === UNRANKED) continue;
+    const before = tables.standing[previousBase + id]!;
+    const debut = before === UNRANKED;
+    const gain = (debut ? previouslyRanked + 1 : before) - standing;
+    if (gain <= 0) continue;
+    rows.push({
+      id,
+      artist: tables.artists[id]!,
+      standing,
+      previous: debut ? undefined : before,
+      gain,
+      debut,
+      dailyPlays: dailyPlays(tables, day, id),
+    });
+  }
+  rows.sort((a, b) => b.gain - a.gain || a.standing - b.standing);
+  if (mode === "all") return { listed: rows };
+
+  const beyond = climbersCut(x);
+  const listed = rows.filter((row) => row.standing <= beyond);
+  const tail = rows.filter((row) => row.standing > beyond);
+  if (mode === "within" || tail.length === 0) return { listed };
+  return {
+    listed,
+    folded: {
+      climbers: tail,
+      beyond,
+      singlePlay: tail.filter((row) => row.dailyPlays === 1).length,
+    },
+  };
+}
+
+export type YAxis = "standing" | "scrobbles";
+
+/** An Artist's Standing (undefined while unranked) or cumulative Scrobbles at the end of `day`. */
+export function valueAt(
+  tables: StandingsTables,
+  artist: number,
+  day: number,
+  yAxis: YAxis,
+): number | undefined {
+  const index = day * tables.artists.length + artist;
+  if (yAxis === "scrobbles") return tables.cumulative[index];
+  const standing = tables.standing[index]!;
+  return standing === UNRANKED ? undefined : standing;
 }
 
 /** Every ArrayBuffer behind the tables, for a zero-copy transfer between threads. */
