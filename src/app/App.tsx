@@ -1,8 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { listenerId, type Db, type ListenerRow } from "../db";
 import { importListener, type ImportProgress } from "../ingest";
-import { dayDate, topX } from "../standings";
-import { showListener, useTables } from "../timeline";
+import { showListener } from "../timeline";
+import { FocusDayPanel } from "./FocusDayPanel";
 import { useSettings } from "./settings";
 
 type Screen =
@@ -84,55 +84,6 @@ function Setup({
         <button type="submit">Import</button>
       </form>
       {error && <p role="alert">{error}</p>}
-    </main>
-  );
-}
-
-function FocusDayPanel({ username }: { username: string }) {
-  const tables = useTables();
-  const x = useSettings((state) => state.x);
-  const update = useSettings((state) => state.update);
-  const [focusDay, setFocusDay] = useState<number | undefined>(undefined);
-
-  if (!tables) return <p role="status">Building {username}'s Standings…</p>;
-  const day = Math.min(focusDay ?? tables.dayCount - 1, tables.dayCount - 1);
-
-  return (
-    <main>
-      <h1>{username}</h1>
-      <label>
-        Focus Day{" "}
-        <input
-          type="range"
-          min={0}
-          max={tables.dayCount - 1}
-          value={day}
-          onChange={(e) => setFocusDay(Number(e.target.value))}
-        />
-      </label>
-      <label>
-        X{" "}
-        <input
-          type="number"
-          min={1}
-          max={100}
-          value={x}
-          onChange={(e) => {
-            const value = Number(e.target.value);
-            if (Number.isInteger(value) && value >= 1 && value <= 100) update({ x: value });
-          }}
-        />
-      </label>
-      <section aria-label="Focus Day">
-        <h2>{dayDate(tables, day)}</h2>
-        <ol aria-label="Top X">
-          {topX(tables, day, x).map((row) => (
-            <li key={row.artist}>
-              #{row.standing} {row.artist} · {row.cumulative.toLocaleString("en")}
-            </li>
-          ))}
-        </ol>
-      </section>
     </main>
   );
 }
