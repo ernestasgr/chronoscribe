@@ -1,15 +1,19 @@
 # Chronoscribe
 
-Personal data visualizations of one listener's last.fm listening history.
+Personal data visualizations of last.fm listening histories: one or more Listeners, kept side by side and viewed one at a time.
 
 ## Language
+
+**Listener**:
+A last.fm user whose Scrobbles have been imported into Chronoscribe; each Listener has their own Scrobbles, Days and Pinned Artists.
+_Avoid_: User, account, profile
 
 **Scrobble**:
 One recorded play of one track, as logged by last.fm.
 _Avoid_: Play, listen, stream
 
 **Day**:
-A calendar day in the listener's chosen timezone, one timezone for the whole history. The timeline's Days run from the Day of the first Scrobble through today, including Days with no Scrobbles.
+A calendar day in the Listener's chosen timezone, one timezone for the whole history. The timeline's Days run from the Day of the first Scrobble through today, including Days with no Scrobbles.
 _Avoid_: Date (when meaning the bucket), UTC day
 
 **Standing**:
@@ -35,4 +39,4 @@ The single Day the timeline is currently inspecting; its Top X, Daily plays and 
 _Avoid_: Selected date, current day
 
 **Pinned Artist**:
-An Artist the listener has chosen to keep visible on the timeline regardless of whether it is in the Top X.
+An Artist the Listener has chosen to keep visible on the timeline regardless of whether it is in the Top X.
