@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Renderer spike</title>
+    <style>
+      body { margin: 16px; font: 13px system-ui, sans-serif; color: #222; background: #fafafa; }
+      nav a { margin-right: 12px; }
+      #chart { width: 1200px; height: 520px; background: #fff; border: 1px solid #e5e5e5; border-radius: 8px; margin-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <nav><a href="?renderer=d3">D3 on Canvas</a><a href="?renderer=echarts-line">ECharts line series</a><a href="?renderer=echarts-custom">ECharts custom series</a></nav>
+    <p id="title">Loading the real tables…</p>
+    <div id="chart"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

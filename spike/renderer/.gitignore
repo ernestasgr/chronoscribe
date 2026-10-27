@@ -1,0 +1,5 @@
+node_modules
+# Personal data: the flattened local history and screenshots of it.
+public/history.json
+results/*.png
+test-results
