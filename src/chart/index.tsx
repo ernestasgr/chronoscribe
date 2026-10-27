@@ -3,7 +3,7 @@ import { select } from "d3-selection";
 import { zoom, zoomIdentity, type ZoomBehavior } from "d3-zoom";
 import { useEffect, useRef, useState, type MouseEvent, type RefObject } from "react";
 import { dayDate, drawnLines, type DayWindow, type StandingsTables } from "../standings";
-import { getView, seek, setWindow, subscribeView, useFocusDay, useViewWindow } from "../timeline";
+import { useFocusDay, useTimeline, useViewWindow, type Timeline } from "../timeline";
 import { GUTTER_TOP, standingLevel } from "./geometry";
 import { strokeStandingLines } from "./lines";
 
@@ -49,17 +49,20 @@ const levelScale = (plot: Plot) => scaleLinear().domain([0, 1]).range([plot.top,
 export function Chart({ tables, x }: { tables: StandingsTables; x: number }) {
     const figure = useRef<HTMLElement>(null);
     const canvas = useRef<HTMLCanvasElement>(null);
+    const timeline = useTimeline();
     const size = useSize(figure);
     const pixelRatio = devicePixelRatio || 1;
 
-    useStandingLines(canvas, tables, x, size);
-    useTimeZoom(figure, tables, size);
+    useStandingLines(timeline, canvas, tables, x, size);
+    useTimeZoom(timeline, figure, tables, size);
 
     function focus(event: MouseEvent) {
         if (!size) return;
         const bounds = event.currentTarget.getBoundingClientRect();
-        const day = dayScale(getView().window, plotOf(size)).invert(event.clientX - bounds.left);
-        seek(Math.round(day));
+        const { window } = timeline.getView();
+        timeline.seek(
+            Math.round(dayScale(window, plotOf(size)).invert(event.clientX - bounds.left)),
+        );
     }
 
     return (
@@ -67,13 +70,13 @@ export function Chart({ tables, x }: { tables: StandingsTables; x: number }) {
             ref={figure}
             aria-label="Timeline"
             onClick={focus}
-            style={{ position: "relative", margin: 0, height: "100%", cursor: "crosshair" }}
+            className="relative m-0 h-full cursor-crosshair"
         >
             <canvas
                 ref={canvas}
                 width={Math.round((size?.width ?? 0) * pixelRatio)}
                 height={Math.round((size?.height ?? 0) * pixelRatio)}
-                style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
+                className="absolute inset-0 size-full"
             />
             {size && <Overlay tables={tables} x={x} size={size} />}
         </figure>
@@ -96,6 +99,7 @@ function useSize(element: RefObject<HTMLElement | null>): Size | undefined {
 
 /** Redraws the lines on the canvas whenever the view changes, at most once per frame. */
 function useStandingLines(
+    { getView, subscribeView }: Timeline,
     canvas: RefObject<HTMLCanvasElement | null>,
     tables: StandingsTables,
     x: number,
@@ -150,11 +154,12 @@ function useStandingLines(
             unsubscribe();
             if (frame !== undefined) cancelAnimationFrame(frame);
         };
-    }, [canvas, tables, x, size]);
+    }, [getView, subscribeView, canvas, tables, x, size]);
 }
 
 /** Drives the window from the wheel and drags through d3-zoom, on the time axis only. */
 function useTimeZoom(
+    { getView, setWindow, subscribeView }: Timeline,
     figure: RefObject<HTMLElement | null>,
     tables: StandingsTables,
     size: Size | undefined,
@@ -201,7 +206,7 @@ function useTimeZoom(
             unsubscribe();
             selection.on(".zoom", null);
         };
-    }, [figure, tables, size]);
+    }, [getView, setWindow, subscribeView, figure, tables, size]);
 }
 
 const clampLabel = (x: number, { width }: Size) =>
@@ -230,14 +235,9 @@ function Overlay({ tables, x, size }: { tables: StandingsTables; x: number; size
         <svg
             width={size.width}
             height={size.height}
-            style={{
-                position: "absolute",
-                inset: 0,
-                pointerEvents: "none",
-                font: "11px system-ui",
-            }}
+            className="pointer-events-none absolute inset-0 text-[11px] text-foreground"
         >
-            <g role="group" aria-label="Standing axis" fill="#888">
+            <g role="group" aria-label="Standing axis" className="fill-muted-foreground">
                 {standings.map((standing) => (
                     <text
                         key={standing}
@@ -256,7 +256,7 @@ function Overlay({ tables, x, size }: { tables: StandingsTables; x: number; size
                             y={levelY(GUTTER_TOP)}
                             width={plot.right - plot.left}
                             height={plot.bottom - levelY(GUTTER_TOP)}
-                            fill="#888"
+                            className="fill-muted-foreground"
                             opacity={0.08}
                         />
                         <text
@@ -270,7 +270,7 @@ function Overlay({ tables, x, size }: { tables: StandingsTables; x: number; size
                     </>
                 )}
             </g>
-            <g role="group" aria-label="Time axis" fill="#888">
+            <g role="group" aria-label="Time axis" className="fill-muted-foreground">
                 {ticks.map((day) => (
                     <text
                         key={day}

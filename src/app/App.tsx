@@ -1,97 +1,129 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { listenerId, type Db, type ListenerRow } from "../db";
-import { importListener, type ImportProgress } from "../ingest";
-import { showListener } from "../timeline";
+import { useState, type FormEvent, type ReactNode } from "react";
+import type { Job } from "../ingest";
+import {
+    Button,
+    Card,
+    CardContent,
+    CardDescription,
+    CardHeader,
+    CardTitle,
+    Input,
+    Label,
+    Progress,
+} from "../ui";
 import { Dashboard } from "./Dashboard";
-import { useSettings } from "./settings";
+import { useQueue, useServices, useSession, useSettings } from "./services";
 
-type Screen =
-    | { kind: "setup"; error?: string }
-    | { kind: "importing"; username: string; progress?: ImportProgress }
-    | { kind: "dashboard"; listener: ListenerRow };
-
-export function App({ db, initialListener }: { db: Db; initialListener: ListenerRow | undefined }) {
-    const [screen, setScreen] = useState<Screen>(
-        initialListener ? { kind: "dashboard", listener: initialListener } : { kind: "setup" },
-    );
-
-    const listener = screen.kind === "dashboard" ? screen.listener : undefined;
-    useEffect(() => {
-        if (listener) showListener(listener);
-    }, [listener]);
-
-    async function addListener(username: string, apiKey: string) {
-        useSettings.getState().update({ apiKey });
-        setScreen({ kind: "importing", username });
-        const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        try {
-            await importListener(db, { username, apiKey, timeZone }, undefined, {
-                onProgress: (progress) => setScreen({ kind: "importing", username, progress }),
-            });
-            const imported = await db.listener(listenerId(username));
-            setScreen(imported ? { kind: "dashboard", listener: imported } : { kind: "setup" });
-        } catch (error) {
-            setScreen({
-                kind: "setup",
-                error: error instanceof Error ? error.message : String(error),
-            });
-        }
-    }
+export function App() {
+    const screen = useSession((state) => state.screen);
 
     switch (screen.kind) {
         case "setup":
-            return <Setup error={screen.error} onSubmit={addListener} />;
+            return <Setup error={screen.error} />;
         case "importing":
-            return (
-                <main>
-                    <h1>Importing {screen.username}</h1>
-                    <p role="status">
-                        {screen.progress
-                            ? `${screen.progress.fetched.toLocaleString("en")} / ${screen.progress.total.toLocaleString("en")} Scrobbles`
-                            : "Starting…"}
-                    </p>
-                </main>
-            );
+            return <Importing listenerId={screen.listenerId} username={screen.username} />;
         case "dashboard":
             return <Dashboard username={screen.listener.username} />;
     }
 }
 
-function Setup({
-    error,
-    onSubmit,
-}: {
-    error?: string;
-    onSubmit: (username: string, apiKey: string) => void;
-}) {
-    const storedKey = useSettings((state) => state.apiKey);
+/** A full-height page with one card in the middle. */
+function Centered({ children }: { children: ReactNode }) {
+    return (
+        <main className="grid min-h-svh place-items-center bg-muted/40 p-4">
+            <Card className="w-full max-w-sm">{children}</Card>
+        </main>
+    );
+}
+
+function Setup({ error }: { error?: string }) {
+    const { session } = useServices();
+    const storedKey = useSettings((settings) => settings.apiKey);
     const [username, setUsername] = useState("");
     const [apiKey, setApiKey] = useState(storedKey);
 
     function submit(event: FormEvent) {
         event.preventDefault();
-        onSubmit(username.trim(), apiKey.trim());
+        session.addListener(username.trim(), apiKey.trim());
     }
 
     return (
-        <main>
-            <h1>Add a Listener</h1>
-            <form onSubmit={submit}>
-                <label>
-                    last.fm username{" "}
-                    <input
-                        value={username}
-                        onChange={(e) => setUsername(e.target.value)}
-                        required
-                    />
-                </label>
-                <label>
-                    API key{" "}
-                    <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} required />
-                </label>
-                <button type="submit">Import</button>
-            </form>
-            {error && <p role="alert">{error}</p>}
-        </main>
+        <Centered>
+            <CardHeader>
+                <CardTitle>
+                    <h1 className="text-xl">Add a Listener</h1>
+                </CardTitle>
+                <CardDescription>
+                    Chronoscribe imports the whole history into this browser. Nothing leaves it
+                    except requests to last.fm.
+                </CardDescription>
+            </CardHeader>
+            <CardContent>
+                <form onSubmit={submit} className="grid gap-4">
+                    <div className="grid gap-2">
+                        <Label htmlFor="username">last.fm username</Label>
+                        <Input
+                            id="username"
+                            value={username}
+                            onChange={(e) => setUsername(e.target.value)}
+                            autoComplete="off"
+                            required
+                        />
+                    </div>
+                    <div className="grid gap-2">
+                        <Label htmlFor="api-key">API key</Label>
+                        <Input
+                            id="api-key"
+                            value={apiKey}
+                            onChange={(e) => setApiKey(e.target.value)}
+                            autoComplete="off"
+                            required
+                        />
+                    </div>
+                    {error && (
+                        <p role="alert" className="text-sm text-destructive">
+                            {error}
+                        </p>
+                    )}
+                    <Button type="submit">Import</Button>
+                </form>
+            </CardContent>
+        </Centered>
+    );
+}
+
+const formatEta = (ms: number) => {
+    const seconds = Math.ceil(ms / 1000);
+    return seconds < 60 ? `${seconds}s left` : `${Math.ceil(seconds / 60)} min left`;
+};
+
+const progressText = ({ progress, etaMs }: Job) =>
+    progress
+        ? `${progress.fetched.toLocaleString("en")} / ${progress.total.toLocaleString("en")} Scrobbles` +
+          (etaMs ? ` · ${formatEta(etaMs)}` : "")
+        : "Starting…";
+
+function Importing({ listenerId, username }: { listenerId: string; username: string }) {
+    const job = useQueue(({ queue }) =>
+        queue.findLast((queued) => queued.listenerId === listenerId),
+    );
+    const percent = job?.progress
+        ? (100 * job.progress.fetched) / Math.max(job.progress.total, 1)
+        : 0;
+
+    return (
+        <Centered>
+            <CardHeader>
+                <CardTitle>
+                    <h1 className="text-xl">Importing {username}</h1>
+                </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-3">
+                <Progress value={percent} aria-label="Import progress" />
+                <p role="status" className="text-sm text-muted-foreground tabular-nums">
+                    {job ? progressText(job) : "Starting…"}
+                </p>
+            </CardContent>
+        </Centered>
     );
 }

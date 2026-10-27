@@ -1,20 +1,38 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { openDb } from "../db";
+import { mostRecentlyViewed, openDb } from "../db";
+import { createEventBus } from "../events";
+import { createIngest, type IngestEvents } from "../ingest";
+import { createTimeline, createWorkerBuild, TimelineContext } from "../timeline";
 import { App } from "./App";
-import { hydrateSettings } from "./settings";
+import { ServicesContext } from "./services";
+import { createSession } from "./session";
+import { createSettings } from "./settings";
 
-/** Opens storage, hydrates the stores and renders the app into `root`. */
+/** The composition root: opens storage, builds every service once and renders the app. */
 export async function boot(root: HTMLElement): Promise<void> {
     const db = openDb();
-    await hydrateSettings(db);
-    const listeners = await db.listeners();
-    const current = listeners
-        .filter((listener) => listener.importComplete)
-        .toSorted((a, b) => b.lastViewedAt - a.lastViewedAt)[0];
+    const events = createEventBus<IngestEvents>();
+    const settings = await createSettings(db);
+    const ingest = createIngest({ db, events });
+    const timeline = createTimeline({ build: createWorkerBuild(), events, now: Date.now });
+    const session = createSession({
+        db,
+        events,
+        ingest,
+        timeline,
+        settings,
+        initial: mostRecentlyViewed(await db.listeners()),
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    });
+
     createRoot(root).render(
         <StrictMode>
-            <App db={db} initialListener={current} />
+            <ServicesContext value={{ ingest, settings, session }}>
+                <TimelineContext value={timeline}>
+                    <App />
+                </TimelineContext>
+            </ServicesContext>
         </StrictMode>,
     );
 }

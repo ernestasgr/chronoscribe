@@ -1,19 +1,16 @@
-import { create } from "zustand";
-import { DEFAULT_SETTINGS, type AppSettings, type Db } from "../db";
+import { createStore, type StoreApi } from "zustand";
+import type { AppSettings, Db } from "../db";
 
-interface SettingsState extends AppSettings {
-    update: (changes: Partial<AppSettings>) => void;
+/** The app-wide settings, hydrated from Dexie and written back to it on every change. */
+export async function createSettings(db: Db) {
+    const stored = await db.loadSettings();
+    const store: StoreApi<AppSettings> = createStore<AppSettings>(() => stored);
+    store.subscribe((settings) => void db.saveSettings(settings));
+
+    return {
+        store,
+        update: (changes: Partial<AppSettings>) => store.setState(changes),
+    };
 }
 
-export const useSettings = create<SettingsState>()((set) => ({
-    ...DEFAULT_SETTINGS,
-    update: (changes) => set(changes),
-}));
-
-/** Loads the settings from Dexie, then writes every later change back to it. */
-export async function hydrateSettings(db: Db): Promise<void> {
-    useSettings.setState(await db.loadSettings());
-    useSettings.subscribe(
-        ({ apiKey, x, climbers }) => void db.saveSettings({ apiKey, x, climbers }),
-    );
-}
+export type Settings = Awaited<ReturnType<typeof createSettings>>;

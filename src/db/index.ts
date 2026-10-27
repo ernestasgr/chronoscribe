@@ -36,28 +36,35 @@ export const DEFAULT_SETTINGS: AppSettings = { apiKey: "", x: 10, climbers: "fol
 
 const SETTINGS_ID = "app";
 
-class ChronoscribeDb extends Dexie {
-    appSettings!: EntityTable<AppSettings & { id: string }, "id">;
-    listeners!: EntityTable<ListenerRow, "id">;
-    scrobbles!: EntityTable<ScrobbleRow, "id">;
+type ChronoscribeDexie = Dexie & {
+    appSettings: EntityTable<AppSettings & { id: string }, "id">;
+    listeners: EntityTable<ListenerRow, "id">;
+    scrobbles: EntityTable<ScrobbleRow, "id">;
+};
 
-    constructor(name: string) {
-        super(name);
-        this.version(1).stores({
-            appSettings: "id",
-            listeners: "id",
-            scrobbles: "++id, [listenerId+uts]",
-        });
-    }
+function openDexie(name: string): ChronoscribeDexie {
+    const dexie = new Dexie(name) as ChronoscribeDexie;
+    dexie.version(1).stores({
+        appSettings: "id",
+        listeners: "id",
+        scrobbles: "++id, [listenerId+uts]",
+    });
+    return dexie;
 }
 
 export function listenerId(username: string): string {
     return username.toLowerCase();
 }
 
+/** The most recently viewed Listener whose import has finished. */
+export const mostRecentlyViewed = (listeners: readonly ListenerRow[]): ListenerRow | undefined =>
+    listeners
+        .filter((listener) => listener.importComplete)
+        .toSorted((a, b) => b.lastViewedAt - a.lastViewedAt)[0];
+
 /** The app's storage. Every read and write of IndexedDB goes through here. */
 export function openDb(name = "chronoscribe") {
-    const dexie = new ChronoscribeDb(name);
+    const dexie = openDexie(name);
     const scrobblesOf = (id: string) =>
         dexie.scrobbles.where("[listenerId+uts]").between([id, Dexie.minKey], [id, Dexie.maxKey]);
 
