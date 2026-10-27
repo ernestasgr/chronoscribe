@@ -51,7 +51,8 @@ export async function importListener(page: Page, username: string) {
 export async function focusOn(page: Page, date: string, firstDay: string) {
     const slider = page.getByRole("slider", { name: "Focus Day" });
     const day = (Date.parse(date) - Date.parse(firstDay)) / 86_400_000;
-    await slider.fill(String(day));
+    await slider.press("Home");
+    for (let step = 0; step < day; step++) await slider.press("ArrowRight");
     await expect(focusDay(page).getByRole("heading", { level: 2 })).toHaveText(date);
 }
 

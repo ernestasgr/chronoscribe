@@ -11,7 +11,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { expect, test } from "vitest";
 
 /** The modules, lowest first: each may import only those before it. */
-const MODULES = ["lastfm", "db", "ingest", "standings", "timeline", "chart", "app"];
+const MODULES = ["events", "ui", "lastfm", "db", "ingest", "standings", "timeline", "chart", "app"];
 
 function sourceFiles(dir: string): string[] {
     return readdirSync(dir).flatMap((name) => {
@@ -40,11 +40,15 @@ function violations(root: string): string[] {
         const from = moduleOf(file);
         const name = relative(root, file).split(sep).join("/");
         return specifiers(readFileSync(file, "utf8"))
-            .filter((specifier) => specifier.startsWith("."))
+            .filter((specifier) => specifier.startsWith(".") || specifier.startsWith("@/"))
             .flatMap((specifier) => {
-                const to = moduleOf(resolve(dirname(file), specifier));
+                // `@/` is the Vite and TypeScript alias for `src/`.
+                const target = specifier.startsWith("@/")
+                    ? join(root, specifier.slice(2))
+                    : resolve(dirname(file), specifier);
+                const to = moduleOf(target);
                 if (!to || to === from) return [];
-                if (!isPublicSurface(resolve(dirname(file), specifier), to)) {
+                if (!isPublicSurface(target, to)) {
                     return [
                         `${name} imports "${specifier}", which bypasses the ${to} public surface`,
                     ];
@@ -93,7 +97,12 @@ test("the check catches a bypassed public surface and an upward import", () => {
         'import { x } from "../db/internal";\nimport "../db";\nexport const y = x;\n',
     );
 
+    // Split so this file's own scan doesn't read the fixture as an import.
+    const alias = "@";
+    write("app/index.ts", `import { x } from "${alias}/db/internal";\nexport const w = x;\n`);
+
     expect(violations(root)).toEqual([
+        'app/index.ts imports "@/db/internal", which bypasses the db public surface',
         'db/index.ts imports "../ingest", but db sits below ingest',
         'ingest/index.ts imports "../db/internal", which bypasses the db public surface',
     ]);

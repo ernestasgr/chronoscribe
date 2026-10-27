@@ -15,22 +15,23 @@ export interface RecentTracksPage {
     total: number;
 }
 
-/** `Hard` errors need the user to fix something; `Transient` ones are worth retrying. */
-export type LastfmErrorKind = "Hard" | "Transient";
+/**
+ * Why a request failed: `Hard` needs the user to fix something, `Transient` is worth retrying,
+ * and `Aborted` means the caller's signal stopped it.
+ */
+export interface LastfmFailure {
+    kind: "Hard" | "Transient" | "Aborted";
+    message: string;
+    code?: number;
+}
+
+export type LastfmResult<T> = { ok: true; value: T } | { ok: false; error: LastfmFailure };
 
 // Every other last.fm error (6 user not found, 10 invalid key, 17 private, …) is Hard.
 const TRANSIENT_CODES = new Set([8, 11, 16, 29]);
 
-export class LastfmError extends Error {
-    constructor(
-        readonly kind: LastfmErrorKind,
-        message: string,
-        readonly code?: number,
-    ) {
-        super(message);
-        this.name = "LastfmError";
-    }
-}
+const fail = (kind: LastfmFailure["kind"], message: string, code?: number) =>
+    ({ ok: false, error: { kind, message, ...(code === undefined ? {} : { code }) } }) as const;
 
 export interface RecentTracksRequest {
     user: string;
@@ -50,13 +51,15 @@ interface RawTrack {
     "@attr"?: { nowplaying?: string };
 }
 
+interface RawBody {
+    error?: number;
+    message?: string;
+    recenttracks?: { track: RawTrack | RawTrack[]; "@attr": Record<string, string> };
+}
+
 export type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 
-/** One page of `user.getRecentTracks`, newest first, without the now-playing entry. */
-export async function getRecentTracks(
-    request: RecentTracksRequest,
-    fetchFn: Fetch = fetch,
-): Promise<RecentTracksPage> {
+const recentTracksUrl = (request: RecentTracksRequest): string => {
     const url = new URL(API_ROOT);
     url.search = new URLSearchParams({
         method: "user.getrecenttracks",
@@ -67,46 +70,51 @@ export async function getRecentTracks(
         limit: String(request.limit),
         ...(request.to === undefined ? {} : { to: String(request.to) }),
     }).toString();
+    return url.toString();
+};
 
-    let response: Response;
-    let body: {
-        error?: number;
-        message?: string;
-        recenttracks?: { track: RawTrack | RawTrack[]; "@attr": Record<string, string> };
-    };
-    try {
-        response = await fetchFn(url.toString(), { signal: request.signal });
-        body = await response.json();
-    } catch (error) {
-        if (request.signal?.aborted) throw error;
-        throw new LastfmError("Transient", `Network error: ${String(error)}`);
-    }
-
+/** Maps a last.fm response to a page, without the now-playing entry, or to its failure. */
+function parseRecentTracks(status: number, body: RawBody): LastfmResult<RecentTracksPage> {
     if (body.error !== undefined) {
         const kind = TRANSIENT_CODES.has(body.error) ? "Transient" : "Hard";
-        throw new LastfmError(kind, body.message ?? `last.fm error ${body.error}`, body.error);
+        return fail(kind, body.message ?? `last.fm error ${body.error}`, body.error);
     }
-    if (!response.ok || !body.recenttracks) {
-        throw new LastfmError(
-            response.status === 429 || response.status >= 500 ? "Transient" : "Hard",
-            `HTTP ${response.status}`,
-        );
+    if (status < 200 || status >= 300 || !body.recenttracks) {
+        return fail(status === 429 || status >= 500 ? "Transient" : "Hard", `HTTP ${status}`);
     }
 
     const { track, "@attr": attr } = body.recenttracks;
     const tracks = Array.isArray(track) ? track : [track];
     return {
-        scrobbles: tracks
-            .filter((t) => t.date?.uts !== undefined && t["@attr"]?.nowplaying !== "true")
-            .map((t) => ({
-                uts: Number(t.date!.uts),
-                artist: t.artist["#text"],
-                track: t.name,
-                album: t.album["#text"],
-            })),
-        page: Number(attr.page),
-        perPage: Number(attr.perPage),
-        totalPages: Number(attr.totalPages),
-        total: Number(attr.total),
+        ok: true,
+        value: {
+            scrobbles: tracks
+                .filter((t) => t.date?.uts !== undefined && t["@attr"]?.nowplaying !== "true")
+                .map((t) => ({
+                    uts: Number(t.date!.uts),
+                    artist: t.artist["#text"],
+                    track: t.name,
+                    album: t.album["#text"],
+                })),
+            page: Number(attr.page),
+            perPage: Number(attr.perPage),
+            totalPages: Number(attr.totalPages),
+            total: Number(attr.total),
+        },
     };
+}
+
+/** One page of `user.getRecentTracks`, newest first, without the now-playing entry. */
+export async function getRecentTracks(
+    request: RecentTracksRequest,
+    fetchFn: Fetch = fetch,
+): Promise<LastfmResult<RecentTracksPage>> {
+    try {
+        const response = await fetchFn(recentTracksUrl(request), { signal: request.signal });
+        return parseRecentTracks(response.status, (await response.json()) as RawBody);
+    } catch (error) {
+        return request.signal?.aborted
+            ? fail("Aborted", "Cancelled")
+            : fail("Transient", `Network error: ${String(error)}`);
+    }
 }
