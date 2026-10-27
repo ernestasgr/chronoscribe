@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { listenerId, type Db, type ListenerRow } from "../db";
 import { importListener, type ImportProgress } from "../ingest";
 import { showListener } from "../timeline";
-import { FocusDayPanel } from "./FocusDayPanel";
+import { Dashboard } from "./Dashboard";
 import { useSettings } from "./settings";
 
 type Screen =
@@ -53,7 +53,7 @@ export function App({ db, initialListener }: { db: Db; initialListener: Listener
                 </main>
             );
         case "dashboard":
-            return <FocusDayPanel username={screen.listener.username} />;
+            return <Dashboard username={screen.listener.username} />;
     }
 }
 

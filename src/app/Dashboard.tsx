@@ -1,4 +1,3 @@
-import { useState } from "react";
 import {
     climbers,
     climbersCut,
@@ -10,60 +9,85 @@ import {
     type ClimbersMode,
     type StandingsTables,
 } from "../standings";
-import { useTables } from "../timeline";
+import { Chart } from "../chart";
+import { seek, useFocusDay, useTables } from "../timeline";
 import { useSettings } from "./settings";
 
 const count = (n: number, noun: string) => `${n.toLocaleString("en")} ${noun}${n === 1 ? "" : "s"}`;
 
-export function FocusDayPanel({ username }: { username: string }) {
+/** The Dashboard: the toolbar, the chart, and the Focus Day sidebar. */
+export function Dashboard({ username }: { username: string }) {
     const tables = useTables();
     const x = useSettings((state) => state.x);
     const mode = useSettings((state) => state.climbers);
     const update = useSettings((state) => state.update);
-    const [focusDay, setFocusDay] = useState<number | undefined>(undefined);
+    const day = useFocusDay();
 
     if (!tables) return <p role="status">Building {username}'s Standings…</p>;
-    const day = Math.min(focusDay ?? tables.dayCount - 1, tables.dayCount - 1);
 
     return (
-        <main>
-            <h1>{username}</h1>
-            <label>
-                Focus Day{" "}
-                <input
-                    type="range"
-                    min={0}
-                    max={tables.dayCount - 1}
-                    value={day}
-                    onChange={(e) => setFocusDay(Number(e.target.value))}
-                />
-            </label>
-            <label>
-                X{" "}
-                <input
-                    type="number"
-                    min={1}
-                    max={100}
-                    value={x}
-                    onChange={(e) => {
-                        const value = Number(e.target.value);
-                        if (Number.isInteger(value) && value >= 1 && value <= 100)
-                            update({ x: value });
-                    }}
-                />
-            </label>
-            <label>
-                Climbers{" "}
-                <select
-                    value={mode}
-                    onChange={(e) => update({ climbers: e.target.value as ClimbersMode })}
-                >
-                    <option value="fold">fold long tail</option>
-                    <option value="within">within Top {climbersCut(x)}</option>
-                    <option value="all">all (raw)</option>
-                </select>
-            </label>
-            <section aria-label="Focus Day">
+        <main
+            style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 22rem",
+                gridTemplateRows: "auto 1fr",
+                gap: "0 1rem",
+                height: "100vh",
+                margin: 0,
+                padding: "0 1rem",
+                boxSizing: "border-box",
+            }}
+        >
+            <header
+                style={{
+                    gridColumn: "1 / -1",
+                    display: "flex",
+                    gap: "1rem",
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                }}
+            >
+                <h1>{username}</h1>
+                <label>
+                    Focus Day{" "}
+                    <input
+                        type="range"
+                        min={0}
+                        max={tables.dayCount - 1}
+                        value={day}
+                        onChange={(e) => seek(Number(e.target.value))}
+                    />
+                </label>
+                <label>
+                    X{" "}
+                    <input
+                        type="number"
+                        min={1}
+                        max={100}
+                        value={x}
+                        onChange={(e) => {
+                            const value = Number(e.target.value);
+                            if (Number.isInteger(value) && value >= 1 && value <= 100)
+                                update({ x: value });
+                        }}
+                    />
+                </label>
+                <label>
+                    Climbers{" "}
+                    <select
+                        value={mode}
+                        onChange={(e) => update({ climbers: e.target.value as ClimbersMode })}
+                    >
+                        <option value="fold">fold long tail</option>
+                        <option value="within">within Top {climbersCut(x)}</option>
+                        <option value="all">all (raw)</option>
+                    </select>
+                </label>
+            </header>
+            <div style={{ minHeight: 0, paddingBottom: "1rem" }}>
+                <Chart tables={tables} x={x} />
+            </div>
+            <section aria-label="Focus Day" style={{ overflowY: "auto", minHeight: 0 }}>
                 <h2>{dayDate(tables, day)}</h2>
                 <p>{count(dayScrobbles(tables, day), "Scrobble")}</p>
                 <TopX tables={tables} day={day} x={x} />
