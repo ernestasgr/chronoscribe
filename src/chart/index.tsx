@@ -4,16 +4,27 @@ import { zoom, zoomIdentity, type ZoomBehavior } from "d3-zoom";
 import { useEffect, useRef, useState, type MouseEvent, type RefObject } from "react";
 import { createStore, useStore, type StoreApi } from "zustand";
 import type { AppSettings } from "../db";
-import { dayDate, drawnLines, type DayWindow, type StandingsTables } from "../standings";
-import { useFocusDay, useTimeline, useViewWindow, type Timeline } from "../timeline";
-import { easeToward, GUTTER_TOP, logStandingTicks, standingLevel } from "./geometry";
+import { dayDate, drawnLines, topX, type DayWindow, type StandingsTables } from "../standings";
+import { useFocusDay, useTimeline, type Timeline } from "../timeline";
+import { easeToward, GUTTER_TOP, logStandingTicks, spreadLabels, standingLevel } from "./geometry";
 import { dayScale, plotOf, useSize, type Plot, type Size } from "./layout";
-import { mostScrobbles, strokeLines, type LinesScale } from "./lines";
+import {
+    colorOf,
+    linesGeometry,
+    mostScrobbles,
+    strokeLines,
+    yOnLine,
+    type LinesGeometry,
+    type LinesScale,
+} from "./lines";
 
 export { Minimap } from "./minimap";
 
 /** The chart settings, all app-wide. */
-export type ChartOptions = Pick<AppSettings, "yAxis" | "belowTopX" | "lineShape" | "linesDrawn">;
+export type ChartOptions = Pick<
+    AppSettings,
+    "yAxis" | "belowTopX" | "lineShape" | "linesDrawn" | "hideFuture"
+>;
 
 /** Half a date label's width, so labels centred on a Day stay inside the chart. */
 const HALF_LABEL = 34;
@@ -22,6 +33,14 @@ const MIN_WINDOW_DAYS = 14;
 /** The least room a Standing label needs, in pixels. */
 const LABEL_PX = 14;
 const NO_PINS: readonly number[] = [];
+/** The height of an Artist label's box, and so the least room between two labels, in pixels. */
+const ARTIST_LABEL_PX = 18;
+/** The room an Artist label needs right of its dot; nearer the edge it flips to the left. */
+const ARTIST_LABEL_ROOM = 160;
+/** How far an Artist's label box starts from its dot. */
+const ARTIST_LABEL_OFFSET = 10;
+/** The padding either side of an Artist's name inside its box. */
+const ARTIST_LABEL_PAD = 5;
 
 /**
  * The top of the Scrobbles axis as it eases, shared by the canvas loop and the axis labels. It
@@ -29,13 +48,20 @@ const NO_PINS: readonly number[] = [];
  */
 type ScrobblesTop = StoreApi<{ scrobblesMax: number; easedAt: number | undefined }>;
 
+/** The overlay parts the per-frame painter moves, which React renders but never positions. */
+interface PaintedParts {
+    timeAxis: RefObject<SVGGElement | null>;
+    marker: RefObject<SVGGElement | null>;
+    labels: RefObject<SVGGElement | null>;
+}
+
 const levelScale = (plot: Plot) => scaleLinear().domain([0, 1]).range([plot.top, plot.bottom]);
 const scrobblesScale = (plot: Plot, max: number) =>
     scaleLinear().domain([0, max]).range([plot.bottom, plot.top]);
 
 /**
  * The timeline chart: one line per drawn Artist, by Standing or by cumulative Scrobbles. The wheel
- * zooms and dragging pans the time axis only; clicking sets the Focus Day.
+ * zooms and dragging pans the time axis only; clicking glides the Focus Day there.
  */
 export function Chart({
     tables,
@@ -48,14 +74,18 @@ export function Chart({
 }) {
     const figure = useRef<HTMLElement>(null);
     const canvas = useRef<HTMLCanvasElement>(null);
+    const timeAxis = useRef<SVGGElement>(null);
+    const marker = useRef<SVGGElement>(null);
+    const labels = useRef<SVGGElement>(null);
     const [scrobblesTop] = useState<ScrobblesTop>(() =>
         createStore(() => ({ scrobblesMax: 1, easedAt: undefined })),
     );
     const timeline = useTimeline();
     const size = useSize(figure);
     const pixelRatio = devicePixelRatio || 1;
+    const paintedParts: PaintedParts = { timeAxis, marker, labels };
 
-    useLines(timeline, canvas, tables, x, options, size, scrobblesTop);
+    useFrames(timeline, canvas, paintedParts, tables, x, options, size, scrobblesTop);
     useTimeZoom(timeline, figure, tables, size);
 
     function focus(event: MouseEvent) {
@@ -87,6 +117,7 @@ export function Chart({
                     options={options}
                     size={size}
                     scrobblesTop={scrobblesTop}
+                    paintedParts={paintedParts}
                 />
             )}
         </figure>
@@ -98,15 +129,18 @@ const fittedDay = (playhead: number, from: number, to: number) =>
     Math.min(to, Math.max(from, Math.floor(playhead)));
 
 /**
- * Redraws the lines on the canvas whenever the view changes, at most once per frame. In Scrobbles
- * mode it keeps drawing while the axis eases toward the most Scrobbles drawn up to the playhead.
+ * Paints whenever the view changes, at most once per frame: the lines on the canvas, stopping at
+ * the playhead if the future is hidden, then the time axis, the Focus Day marker and the Artist
+ * labels riding the lines at the playhead. In Scrobbles mode it keeps painting while the
+ * axis eases toward the most Scrobbles drawn up to the playhead.
  */
-function useLines(
+function useFrames(
     { getView, subscribeView }: Timeline,
     canvas: RefObject<HTMLCanvasElement | null>,
+    { timeAxis, marker, labels }: PaintedParts,
     tables: StandingsTables,
     x: number,
-    { yAxis, belowTopX, lineShape, linesDrawn }: ChartOptions,
+    { yAxis, belowTopX, lineShape, linesDrawn, hideFuture }: ChartOptions,
     size: Size | undefined,
     scrobblesTop: ScrobblesTop,
 ) {
@@ -119,6 +153,12 @@ function useLines(
         const levelY = levelScale(plot);
         const last = tables.dayCount - 1;
         let frame: number | undefined;
+        // Each name's rendered width, measured once per element since its text never changes.
+        const nameWidths = new WeakMap<SVGTextElement, number>();
+        const widthOf = (name: SVGTextElement) =>
+            nameWidths.get(name) ?? nameWidths.set(name, name.getComputedTextLength()).get(name)!;
+        // Ticks laid out from older tables would keep their old dates.
+        if (timeAxis.current) select(timeAxis.current).selectAll("text").remove();
 
         const schedule = () => {
             frame ??= requestAnimationFrame((now) => {
@@ -152,23 +192,38 @@ function useLines(
             const { window, playhead } = getView();
             const dayX = dayScale(window, plot);
             const from = Math.max(0, Math.floor(window.start) - 1);
-            const to = Math.min(last, Math.ceil(window.end) + 1);
+            const to = Math.min(last, Math.ceil(hideFuture ? playhead : window.end) + 1);
             const artists = drawnLines(tables, window, x, linesDrawn, NO_PINS);
             const scale = scaleOf(artists, fittedDay(playhead, from, to), now);
+            const playheadX = dayX(playhead);
+            const inView = playheadX >= plot.left - 0.5 && playheadX <= plot.right + 0.5;
             context.setTransform(dpr, 0, 0, dpr, 0, 0);
             context.clearRect(0, 0, size.width, size.height);
             context.save();
             context.beginPath();
+            // Hiding the future is clipping the lines at the playhead.
+            const right = hideFuture ? Math.min(plot.right, playheadX) : plot.right;
             context.rect(
                 plot.left,
                 plot.top - 4,
-                plot.right - plot.left,
+                Math.max(0, right - plot.left),
                 plot.bottom - plot.top + 8,
             );
             context.clip();
             context.lineWidth = 1.8;
-            strokeLines(context, { tables, artists, dayX, scale, from, to });
+            const geometry = linesGeometry({ tables, artists, dayX, scale, from, to });
+            strokeLines(context, geometry, scale);
             context.restore();
+            if (timeAxis.current) placeTimeAxis(timeAxis.current, tables, dayX, size);
+            if (marker.current) placeMarker(marker.current, playheadX, inView, size);
+            if (labels.current)
+                placeLabels(labels.current, {
+                    geometry,
+                    scale,
+                    playheadX: inView ? playheadX : undefined,
+                    plot,
+                    widthOf,
+                });
         };
 
         if (yAxis === "standing") scrobblesTop.setState({ easedAt: undefined });
@@ -182,15 +237,106 @@ function useLines(
         getView,
         subscribeView,
         canvas,
+        timeAxis,
+        marker,
+        labels,
         tables,
         x,
         yAxis,
         belowTopX,
         lineShape,
         linesDrawn,
+        hideFuture,
         size,
         scrobblesTop,
     ]);
+}
+
+/** Lays the time axis's date labels out under `dayX`, keeping each tick's element as it moves. */
+function placeTimeAxis(
+    group: SVGGElement,
+    tables: StandingsTables,
+    dayX: ReturnType<typeof dayScale>,
+    size: Size,
+) {
+    const plot = plotOf(size);
+    const ticks = dayX
+        .ticks(Math.max(2, Math.floor((plot.right - plot.left) / 110)))
+        .filter((day) => Number.isInteger(day) && day >= 0 && day < tables.dayCount);
+    select(group)
+        .selectAll<SVGTextElement, number>("text")
+        .data(ticks, (day) => day)
+        .join((enter) =>
+            enter
+                .append("text")
+                .attr("text-anchor", "middle")
+                .text((day) => dayDate(tables, day)),
+        )
+        .attr("x", (day) => clampLabel(dayX(day), size))
+        .attr("y", size.height - 8);
+}
+
+/** Moves the Focus Day marker to the playhead, hidden while the playhead is out of view. */
+function placeMarker(group: SVGGElement, x: number, inView: boolean, size: Size) {
+    group.style.display = inView ? "" : "none";
+    group.setAttribute("transform", `translate(${x},0)`);
+    group.querySelector("text")?.setAttribute("x", String(clampLabel(x, size) - x));
+}
+
+interface LabelsFrame {
+    geometry: LinesGeometry;
+    scale: LinesScale;
+    /** The playhead's pixel x, or undefined while it is out of view. */
+    playheadX: number | undefined;
+    plot: Plot;
+    /** A name's rendered width, for its box. */
+    widthOf: (name: SVGTextElement) => number;
+}
+
+/**
+ * Puts each labelled Artist's dot on its line at the playhead and its boxed name beside it, the
+ * boxes pushed apart so they don't overlap, with a leader back to the dot. Labels without a line
+ * there, or out of view, are hidden.
+ */
+function placeLabels(
+    group: SVGGElement,
+    { geometry, scale, playheadX, plot, widthOf }: LabelsFrame,
+) {
+    const items = [...group.children].filter((item) => item instanceof SVGGElement);
+    const ys = items.map((item) =>
+        playheadX === undefined
+            ? undefined
+            : yOnLine(geometry, scale, Number(item.dataset.artist), playheadX),
+    );
+    const spread = spreadLabels(
+        ys.filter((y) => y !== undefined),
+        ARTIST_LABEL_PX,
+        plot.top,
+        plot.bottom,
+    );
+    const flipped = playheadX !== undefined && playheadX > plot.right - ARTIST_LABEL_ROOM;
+    let placed = 0;
+    items.forEach((item, i) => {
+        const y = ys[i];
+        item.style.display = y === undefined ? "none" : "";
+        if (y === undefined) return;
+        const shift = spread[placed++]! - y;
+        const side = flipped ? -1 : 1;
+        item.setAttribute("transform", `translate(${playheadX},${y})`);
+        const leader = item.querySelector("line");
+        leader?.setAttribute("x2", String(side * ARTIST_LABEL_OFFSET));
+        leader?.setAttribute("y2", String(shift));
+        const name = item.querySelector("text");
+        const box = item.querySelector("rect");
+        if (!name || !box) return;
+        const boxWidth = widthOf(name) + 2 * ARTIST_LABEL_PAD;
+        const boxLeft = flipped ? -ARTIST_LABEL_OFFSET - boxWidth : ARTIST_LABEL_OFFSET;
+        box.setAttribute("x", String(boxLeft));
+        box.setAttribute("y", String(shift - (ARTIST_LABEL_PX - 2) / 2));
+        box.setAttribute("width", String(boxWidth));
+        name.setAttribute("x", String(boxLeft + ARTIST_LABEL_PAD));
+        name.setAttribute("y", String(shift));
+    });
 }
 
 /** Drives the window from the wheel and drags through d3-zoom, on the time axis only. */
@@ -248,29 +394,27 @@ function useTimeZoom(
 const clampLabel = (x: number, { width }: Size) =>
     Math.min(width - HALF_LABEL, Math.max(HALF_LABEL, x));
 
-/** The axes and the Focus Day marker, drawn by React over the canvas. */
+/**
+ * The axes, the Focus Day marker and the Artist labels over the canvas. React renders them as the
+ * Focus Day changes; the per-frame painter positions the time axis, the marker and the labels.
+ */
 function Overlay({
     tables,
     x,
     options,
     size,
     scrobblesTop,
+    paintedParts: { timeAxis, marker, labels },
 }: {
     tables: StandingsTables;
     x: number;
     options: ChartOptions;
     size: Size;
     scrobblesTop: ScrobblesTop;
+    paintedParts: PaintedParts;
 }) {
-    const window = useViewWindow();
     const focusDay = useFocusDay();
     const plot = plotOf(size);
-    const dayX = dayScale(window, plot);
-    const ticks = dayX
-        .ticks(Math.max(2, Math.floor((plot.right - plot.left) / 110)))
-        .filter((day) => Number.isInteger(day) && day >= 0 && day < tables.dayCount);
-    const markerX = dayX(focusDay);
-    const showMarker = markerX >= plot.left - 0.5 && markerX <= plot.right + 0.5;
 
     return (
         <svg
@@ -288,41 +432,72 @@ function Overlay({
             ) : (
                 <ScrobblesAxis plot={plot} scrobblesTop={scrobblesTop} />
             )}
-            <g role="group" aria-label="Time axis" className="fill-muted-foreground">
-                {ticks.map((day) => (
-                    <text
-                        key={day}
-                        x={clampLabel(dayX(day), size)}
-                        y={size.height - 8}
-                        textAnchor="middle"
-                    >
-                        {dayDate(tables, day)}
-                    </text>
-                ))}
+            <g
+                ref={timeAxis}
+                role="group"
+                aria-label="Time axis"
+                className="fill-muted-foreground"
+            />
+            <g ref={marker} role="group" aria-label="Focus Day marker">
+                <line
+                    x1={0}
+                    x2={0}
+                    y1={plot.top}
+                    y2={plot.bottom}
+                    stroke="currentColor"
+                    strokeDasharray="3 3"
+                />
+                <text
+                    y={plot.top}
+                    dy={-4}
+                    textAnchor="middle"
+                    fill="currentColor"
+                    fontWeight="bold"
+                >
+                    {dayDate(tables, focusDay)}
+                </text>
             </g>
-            {showMarker && (
-                <g role="group" aria-label="Focus Day marker">
-                    <line
-                        x1={markerX}
-                        x2={markerX}
-                        y1={plot.top}
-                        y2={plot.bottom}
-                        stroke="currentColor"
-                        strokeDasharray="3 3"
+            <ArtistLabels tables={tables} day={focusDay} x={x} group={labels} />
+        </svg>
+    );
+}
+
+/** A dot and a name for each Artist in the Focus Day's Top X, for the painter to put on its line. */
+function ArtistLabels({
+    tables,
+    day,
+    x,
+    group,
+}: {
+    tables: StandingsTables;
+    day: number;
+    x: number;
+    group: RefObject<SVGGElement | null>;
+}) {
+    return (
+        <g ref={group} role="group" aria-label="Artist labels" className="text-xs font-semibold">
+            {topX(tables, day, x).map((row) => (
+                <g key={row.id} data-artist={row.id}>
+                    <line stroke={colorOf(row.id)} strokeWidth={1} />
+                    <rect
+                        height={ARTIST_LABEL_PX - 2}
+                        rx={4}
+                        stroke={colorOf(row.id)}
+                        strokeWidth={1.5}
+                        className="fill-card/90"
                     />
-                    <text
-                        x={clampLabel(markerX, size)}
-                        y={plot.top}
-                        dy={-4}
-                        textAnchor="middle"
-                        fill="currentColor"
-                        fontWeight="bold"
-                    >
-                        {dayDate(tables, focusDay)}
+                    <circle
+                        r={4}
+                        fill={colorOf(row.id)}
+                        strokeWidth={1.5}
+                        className="stroke-card"
+                    />
+                    <text dominantBaseline="central" className="fill-foreground">
+                        {row.artist}
                     </text>
                 </g>
-            )}
-        </svg>
+            ))}
+        </g>
     );
 }
 

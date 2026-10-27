@@ -1,5 +1,4 @@
 import type { BelowTopX } from "../db";
-import type { DayWindow } from "../standings";
 
 export type Point = [x: number, y: number];
 
@@ -43,6 +42,39 @@ function gutterLevel(standing: number, x: number, artistCount: number): number {
 /** The level at which the gutter band begins, just under #X's row. */
 export const GUTTER_TOP = 1 - GUTTER_SHARE;
 
+/** How close two curves' ends must be to count as touching rather than overlapping. */
+const TOUCH_PX = 0.5;
+
+/** The share of a bump-x curve's width covered at progress `u` along it, both from 0 to 1. */
+const bumpXFraction = (u: number) => 1.5 * u * (1 - u) + u ** 3;
+
+/** The progress `u` along a bump-x curve at `fraction` of its width, by bisection. */
+function bumpProgress(fraction: number): number {
+    let [low, high] = [0, 1];
+    for (let i = 0; i < 20; i++) {
+        const u = (low + high) / 2;
+        if (bumpXFraction(u) < fraction) low = u;
+        else high = u;
+    }
+    return (low + high) / 2;
+}
+
+/**
+ * The height of a drawn line at pixel `x`, along its S-curves (bump-x) or its straight segments;
+ * undefined where the line breaks or ends. This keeps a playhead's dot on the line it rides.
+ */
+export function yAlong(segments: readonly Point[][], x: number, sCurve: boolean) {
+    const run = segments.find((r) => x >= r[0]![0] - TOUCH_PX && x <= r.at(-1)![0] + TOUCH_PX);
+    if (!run) return undefined;
+    const next = run.findIndex(([px]) => px >= x);
+    if (next <= 0) return run.at(next)![1];
+    const [[ax, ay], [bx, by]] = [run[next - 1]!, run[next]!];
+    const fraction = (x - ax) / (bx - ax);
+    if (!sCurve) return ay + (by - ay) * fraction;
+    const u = bumpProgress(fraction);
+    return ay + (by - ay) * (3 * u * u - 2 * u ** 3);
+}
+
 /**
  * One line over Days `from`..`to` as runs of points, to be drawn with a bump-x curve: consecutive
  * points at the same height are a flat run, at different heights an S-curve at least
@@ -77,10 +109,12 @@ export function sCurveSegments(
             const after = x(day);
             const mid = (before + after) / 2;
             const half = Math.max((after - before) / 2, MIN_CURVE_PX / 2);
+            const start = mid - half;
             const last = run.at(-1)!;
-            // Changes closer together than a curve's width curve straight on from the last one.
-            if (mid - half > last[0]) run.push([mid - half, held.y]);
-            else if (run.length > 1) run.pop();
+            // Changes closer together than a curve's width curve straight on from the last one;
+            // curves that only touch, as on Days wider than a curve, each keep their Day's level.
+            if (start > last[0] + TOUCH_PX) run.push([start, held.y]);
+            else if (start < last[0] - TOUCH_PX && run.length > 1) run.pop();
             run.push([mid + half, current]);
         }
         held = { day, y: current };
@@ -113,11 +147,46 @@ export function dailySegments(
     return segments;
 }
 
-/** `window` moved `by` Days, stopping at Day 0 and `last` without changing its width. */
-export function panned({ start, end }: DayWindow, by: number, last: number): DayWindow {
-    const width = Math.min(end - start, last);
-    const moved = Math.min(Math.max(start + by, 0), last - width);
-    return { start: moved, end: moved + width };
+/** A run of labels stacked `gap` apart from `top`, centred on where its members would sit. */
+interface Stack {
+    members: number[];
+    /** The sum of where its members would sit. */
+    wantedSum: number;
+    top: number;
+}
+
+/**
+ * Label heights `gap` apart at least, between `top` and `bottom`, each overlapping run spread
+ * evenly around where its labels would sit. Returned in the order given, the labels kept in order.
+ */
+export function spreadLabels(ys: readonly number[], gap: number, top: number, bottom: number) {
+    const order = ys.map((_, i) => i).toSorted((a, b) => ys[a]! - ys[b]!);
+    const placed = (members: number[], wantedSum: number): Stack => ({
+        members,
+        wantedSum,
+        top: Math.max(
+            top,
+            Math.min(
+                bottom - (members.length - 1) * gap,
+                wantedSum / members.length - ((members.length - 1) * gap) / 2,
+            ),
+        ),
+    });
+    const stacks = order.reduce<Stack[]>((kept, i) => {
+        let stack = placed([i], ys[i]!);
+        // Merges the new label's stack into the ones above it for as long as they overlap.
+        while (kept.length > 0) {
+            const above = kept.at(-1)!;
+            if (above.top + above.members.length * gap <= stack.top) break;
+            kept.pop();
+            stack = placed([...above.members, ...stack.members], above.wantedSum + stack.wantedSum);
+        }
+        return [...kept, stack];
+    }, []);
+    const spread = Array.from<number>({ length: ys.length });
+    for (const stack of stacks)
+        stack.members.forEach((i, rank) => (spread[i] = stack.top + rank * gap));
+    return spread;
 }
 
 /** How long the Scrobbles axis takes to close about two thirds of the gap to its target. */

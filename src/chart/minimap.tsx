@@ -1,9 +1,8 @@
 import { scaleLinear } from "d3-scale";
 import { area, curveStepAfter } from "d3-shape";
-import { useMemo, useRef, type KeyboardEvent, type PointerEvent } from "react";
+import { useCallback, useMemo, useRef, type KeyboardEvent, type PointerEvent } from "react";
 import { dayDate, dayScrobbles, type DayWindow, type StandingsTables } from "../standings";
-import { useTimeline, useViewWindow } from "../timeline";
-import { panned } from "./geometry";
+import { panned, useTimeline, useViewFrames, type View } from "../timeline";
 import { MARGIN, useSize } from "./layout";
 
 const HEIGHT = 40;
@@ -35,22 +34,48 @@ function volumePath(tables: StandingsTables, width: number): string {
     );
 }
 
+/** Moves the window's mark, and its value for assistive technology, to `window`. */
+function markWindow(
+    handle: HTMLElement,
+    window: DayWindow,
+    dayX: ReturnType<typeof historyScale>,
+    tables: StandingsTables,
+) {
+    const left = dayX(window.start);
+    const start = Math.round(window.start);
+    handle.style.left = `${left}px`;
+    handle.style.width = `${Math.max(MIN_HANDLE_PX, dayX(window.end) - left)}px`;
+    handle.setAttribute("aria-valuenow", String(start));
+    handle.setAttribute(
+        "aria-valuetext",
+        `${dayDate(tables, start)} to ${dayDate(tables, Math.round(window.end))}`,
+    );
+}
+
 /**
  * The whole history's Daily volume under the chart, with the chart's window marked on it.
- * Dragging the window, or pressing beside it, pans the chart; the window keeps its width.
+ * Dragging the window, or pressing beside it, pans the chart; the window keeps its width. The
+ * window's mark follows every frame without a render.
  */
 export function Minimap({ tables }: { tables: StandingsTables }) {
     const element = useRef<HTMLDivElement>(null);
+    const handle = useRef<HTMLDivElement>(null);
     const drag = useRef<{ pointerX: number; window: DayWindow }>(undefined);
     const size = useSize(element);
-    const window = useViewWindow();
     const { getView, setWindow } = useTimeline();
     const last = tables.dayCount - 1;
     const width = size?.width ?? 0;
     const path = useMemo(() => (width ? volumePath(tables, width) : ""), [tables, width]);
-    const dayX = historyScale(tables, width);
-    const left = dayX(window.start);
-    const handleWidth = Math.max(MIN_HANDLE_PX, dayX(window.end) - left);
+    const dayX = useMemo(() => historyScale(tables, width), [tables, width]);
+
+    useViewFrames(
+        useCallback(
+            ({ window }: View) => {
+                if (handle.current) markWindow(handle.current, window, dayX, tables);
+            },
+            [dayX, tables],
+        ),
+    );
 
     const pan = (from: DayWindow, by: number) => setWindow(panned(from, by, last));
 
@@ -116,16 +141,14 @@ export function Minimap({ tables }: { tables: StandingsTables }) {
             </svg>
             {width > 0 && last > 0 && (
                 <div
+                    ref={handle}
                     role="slider"
                     aria-label="Chart window"
                     aria-valuemin={0}
                     aria-valuemax={last}
-                    aria-valuenow={Math.round(window.start)}
-                    aria-valuetext={`${dayDate(tables, Math.round(window.start))} to ${dayDate(tables, Math.round(window.end))}`}
                     tabIndex={0}
                     onKeyDown={press}
                     className="absolute inset-y-0 rounded-sm border border-primary/60 bg-primary/10 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    style={{ left, width: handleWidth }}
                 />
             )}
         </div>

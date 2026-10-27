@@ -1,24 +1,24 @@
 import * as Comlink from "comlink";
-import { createContext, useContext } from "react";
+import { createContext, useContext, useEffect } from "react";
 import { createStore, useStore, type StoreApi } from "zustand";
+import type { AppSettings } from "../db";
 import type { Subscriber } from "../events";
 import type { IngestEvents } from "../ingest";
 import type { DayWindow, StandingsTables } from "../standings";
 import type { StandingsWorker } from "./standings.worker";
+import { clamp, transition, withinHistory, type ViewEvent, type ViewState } from "./view";
 
-export interface View {
-    /** The fractional Day being inspected; the Focus Day is the Day nearest it. */
-    playhead: number;
-    /** The fractional Days the chart shows. */
-    window: DayWindow;
-}
+export { panned } from "./view";
+
+/** The part of the view the chart draws each frame. */
+export type View = Pick<ViewState, "playhead" | "window">;
 
 export interface ListenerRef {
     id: string;
     timeZone: string;
 }
 
-export interface TimelineState extends View {
+export interface TimelineState extends ViewState {
     /** The Listener whose tables the timeline holds. */
     listener: ListenerRef | undefined;
     tables: StandingsTables | undefined;
@@ -29,20 +29,22 @@ export interface TimelineState extends View {
 /** Builds a Listener's Standings tables as of `today` (Unix seconds). */
 export type BuildStandings = (listener: ListenerRef, today: number) => Promise<StandingsTables>;
 
+/** Calls `callback` with the frame's time in ms before the next paint; returns a cancel. */
+export type RequestFrame = (callback: (at: number) => void) => () => void;
+
+/** The playback settings, read when they are needed. */
+export type Playback = () => Pick<AppSettings, "secondsPerDay" | "stepDays">;
+
 const INITIAL: TimelineState = {
     listener: undefined,
     tables: undefined,
     buildId: 0,
     playhead: 0,
     window: { start: 0, end: 0 },
+    motion: { kind: "still" },
 };
 
-const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const lastDay = (tables: StandingsTables | undefined) => Math.max(0, (tables?.dayCount ?? 1) - 1);
-const clampWindow = ({ start, end }: DayWindow, last: number): DayWindow => ({
-    start: clamp(start, 0, last),
-    end: clamp(end, 0, last),
-});
 
 /**
  * Swaps in a Listener's new tables. Fresh tables open on the whole history with the last Day in
@@ -54,31 +56,49 @@ export function swapIn(state: TimelineState, tables: StandingsTables): Partial<T
         ? {
               tables,
               playhead: clamp(state.playhead, 0, last),
-              window: clampWindow(state.window, last),
+              window: withinHistory(state.window, last),
           }
-        : { tables, playhead: last, window: { start: 0, end: last } };
+        : {
+              tables,
+              playhead: last,
+              window: { start: 0, end: last },
+              motion: { kind: "still" },
+          };
 }
 
-const seekTo = ({ tables }: TimelineState, day: number): Partial<TimelineState> => ({
-    playhead: clamp(day, 0, lastDay(tables)),
-});
-
-const showWindow = ({ tables }: TimelineState, window: DayWindow): Partial<TimelineState> => ({
-    window: clampWindow(window, lastDay(tables)),
-});
+/** The view after `event`, over the tables held. */
+const afterViewEvent = (state: TimelineState, event: ViewEvent): Partial<TimelineState> => {
+    const { playhead, window, motion } = transition(state, event, lastDay(state.tables));
+    return { playhead, window, motion };
+};
 
 export interface TimelineDeps {
     build: BuildStandings;
     events: Subscriber<IngestEvents>;
     now: () => number;
+    requestFrame: RequestFrame;
+    playback: Playback;
 }
 
 /**
  * The main thread's hold on the current Listener's tables (build, swap, drop stale results) and
- * the view store. Rebuilds whenever ingest changes the current Listener's Scrobbles.
+ * the view store, with the player that moves it frame by frame while playing or gliding.
+ * Rebuilds whenever ingest changes the current Listener's Scrobbles.
  */
-export function createTimeline({ build, events, now }: TimelineDeps) {
+export function createTimeline({ build, events, now, requestFrame, playback }: TimelineDeps) {
     const store: StoreApi<TimelineState> = createStore<TimelineState>(() => INITIAL);
+    const dispatch = (event: ViewEvent) => store.setState((state) => afterViewEvent(state, event));
+    let cancelFrame: (() => void) | undefined;
+
+    // Asks for the next frame for as long as the playhead is moving.
+    const animate = ({ motion }: TimelineState) => {
+        if (motion.kind === "still" || cancelFrame) return;
+        cancelFrame = requestFrame((at) => {
+            cancelFrame = undefined;
+            dispatch({ type: "frame", at, msPerDay: playback().secondsPerDay * 1000 });
+        });
+    };
+    const stopAnimating = store.subscribe(animate);
 
     async function rebuild(listener: ListenerRef): Promise<void> {
         const buildId = store.getState().buildId + 1;
@@ -102,11 +122,23 @@ export function createTimeline({ build, events, now }: TimelineDeps) {
     return {
         store,
         show,
-        dispose,
-        /** Moves the playhead to `day`. */
-        seek: (day: number) => store.setState((state) => seekTo(state, day)),
+        dispose: () => {
+            dispose();
+            stopAnimating();
+            cancelFrame?.();
+        },
+        play: () => dispatch({ type: "play" }),
+        pause: () => dispatch({ type: "pause" }),
+        /** Plays if paused, pauses if playing. */
+        togglePlaying: () => dispatch({ type: "toggle" }),
+        /** Moves the playhead to `day`, gliding there unless `glide` is false. */
+        seek: (day: number, { glide = true }: { glide?: boolean } = {}) =>
+            dispatch({ type: "seek", day, glide }),
+        /** Glides the step size's Days forward (1) or back (-1). */
+        step: (direction: 1 | -1) =>
+            dispatch({ type: "step", days: direction * playback().stepDays }),
         /** Shows the Days in `window`, kept within the history. */
-        setWindow: (window: DayWindow) => store.setState((state) => showWindow(state, window)),
+        setWindow: (window: DayWindow) => dispatch({ type: "setWindow", window }),
         /** The current view, for code that reads it outside React. */
         getView: (): View => {
             const { playhead, window } = store.getState();
@@ -148,5 +180,14 @@ export const useTables = (): StandingsTables | undefined => useTimelineState((s)
 /** The Focus Day: the Day nearest the playhead. */
 export const useFocusDay = (): number => useTimelineState((s) => Math.round(s.playhead));
 
-/** The chart's window, for React overlays that must follow every pan and zoom. */
-export const useViewWindow = (): DayWindow => useTimelineState((s) => s.window);
+/** Whether the history is playing. */
+export const usePlaying = (): boolean => useTimelineState((s) => s.motion.kind === "playing");
+
+/** Calls `onFrame` with the view now and after each change, for per-frame readers outside React. */
+export function useViewFrames(onFrame: (view: View) => void): void {
+    const { getView, subscribeView } = useTimeline();
+    useEffect(() => {
+        onFrame(getView());
+        return subscribeView(onFrame);
+    }, [getView, subscribeView, onFrame]);
+}
