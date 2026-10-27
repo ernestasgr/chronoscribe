@@ -246,6 +246,69 @@ export function climbers(
     };
 }
 
+/** Which Artists the chart draws lines for, besides the Pinned Artists. */
+export type LinesRule = "warm-up";
+
+/** A span of fractional Days. */
+export interface DayWindow {
+    start: number;
+    end: number;
+}
+
+/** The Days at the start of the history that the "warm-up" rule ignores. */
+const WARM_UP_DAYS = 30;
+
+// The last drawn lines for each tables object, keyed on everything that decides them.
+const drawnLinesMemo = new WeakMap<StandingsTables, { key: string; lines: readonly number[] }>();
+
+/**
+ * The ids of the Artists the chart draws a line for over `window`, in ascending order: every
+ * Artist in the Top X on a visible Day after the warm-up, plus the Pinned Artists. A window that
+ * lies wholly inside the warm-up draws its own Top X, so a young history isn't left blank.
+ * Memoised on the integer window bounds, `x`, `rule`, `pinned` and `tables`.
+ */
+export function drawnLines(
+    tables: StandingsTables,
+    window: DayWindow,
+    x: number,
+    rule: LinesRule,
+    pinned: readonly number[],
+): readonly number[] {
+    const first = Math.max(0, Math.ceil(window.start));
+    const last = Math.min(tables.dayCount - 1, Math.floor(window.end));
+    const key = [first, last, x, rule, pinned.toSorted((a, b) => a - b).join()].join("|");
+    const memo = drawnLinesMemo.get(tables);
+    if (memo?.key === key) return memo.lines;
+    const lines = linesOver(
+        tables,
+        last >= WARM_UP_DAYS ? Math.max(first, WARM_UP_DAYS) : first,
+        last,
+        x,
+        pinned,
+    );
+    drawnLinesMemo.set(tables, { key, lines });
+    return lines;
+}
+
+/** The Top X of every Day from `first` through `last`, plus `pinned`, in ascending order. */
+function linesOver(
+    tables: StandingsTables,
+    first: number,
+    last: number,
+    x: number,
+    pinned: readonly number[],
+): readonly number[] {
+    const artistCount = tables.artists.length;
+    const drawn = new Set<number>(pinned);
+    for (let day = first; day <= last; day++)
+        for (let rank = 0; rank < Math.min(x, artistCount); rank++) {
+            const id = tables.rankOrder[day * artistCount + rank]!;
+            if (id === UNRANKED) break;
+            drawn.add(id);
+        }
+    return [...drawn].toSorted((a, b) => a - b);
+}
+
 export type YAxis = "standing" | "scrobbles";
 
 /** An Artist's Standing (undefined while unranked) or cumulative Scrobbles at the end of `day`. */

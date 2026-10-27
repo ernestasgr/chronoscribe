@@ -68,6 +68,18 @@ test("every directory under src is a known module", () => {
     expect(dirs.filter((dir) => !MODULES.includes(dir))).toEqual([]);
 });
 
+test("only standings and the chart's line-path loop read the raw table arrays", () => {
+    const root = resolve(import.meta.dirname);
+    const allowed = [join(root, "chart", "lines.ts")];
+    const raw = /\.(?:standing|cumulative|rankOrder)\s*\[|\.rankOrder\b/;
+    const readers = sourceFiles(root)
+        .filter((file) => !file.startsWith(join(root, "standings") + sep))
+        .filter((file) => !allowed.includes(file) && !file.endsWith(".test.ts"))
+        .filter((file) => raw.test(readFileSync(file, "utf8")))
+        .map((file) => relative(root, file).split(sep).join("/"));
+    expect(readers).toEqual([]);
+});
+
 test("the check catches a bypassed public surface and an upward import", () => {
     const root = mkdtempSync(join(tmpdir(), "architecture-"));
     const write = (path: string, source: string) => {

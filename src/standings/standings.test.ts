@@ -5,6 +5,7 @@ import {
     dailyPlays,
     dayDate,
     dayScrobbles,
+    drawnLines,
     topX,
     valueAt,
     type StandingsTables,
@@ -271,5 +272,65 @@ describe("Days in the Listener's timezone", () => {
         expect(valueAt(tables, air, dayOf("2026-03-08"), "scrobbles")).toBe(2);
         expect(valueAt(tables, air, dayOf("2026-10-31"), "scrobbles")).toBe(2);
         expect(valueAt(tables, air, dayOf("2026-11-01"), "scrobbles")).toBe(4);
+    });
+});
+
+describe("drawnLines", () => {
+    // With X = 1: Opener leads Day 0 only, Early leads Days 1–34, Mid Days 35–49, Late from Day 50.
+    const tables = buildStandings(
+        [
+            scrobble("2026-01-01T08:00:00Z", "Opener"),
+            ...[0, 1, 2].map((i) => scrobble(`2026-01-02T08:0${i}:00Z`, "Early")),
+            ...[0, 1, 2, 3, 4].map((i) => scrobble(`2026-02-05T08:0${i}:00Z`, "Mid")),
+            ...[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) =>
+                scrobble(`2026-02-20T08:0${i}:00Z`, "Late"),
+            ),
+        ],
+        { timeZone: "UTC", today: uts("2026-03-02T12:00:00Z") },
+    );
+    const idOf = (name: string) => tables.artists.indexOf(name);
+    const lines = (start: number, end: number, x = 1, pinned: number[] = []) =>
+        drawnLines(tables, { start, end }, x, "warm-up", pinned)
+            .map((id) => tables.artists[id])
+            .toSorted();
+
+    test("every Artist in the Top X on any visible Day gets a line", () => {
+        expect(lines(36, 45)).toEqual(["Mid"]);
+        expect(lines(36, 60)).toEqual(["Late", "Mid"]);
+        expect(lines(36, 60, 2)).toEqual(["Early", "Late", "Mid"]);
+    });
+
+    test("the first 30 Days of the history don't decide which lines are drawn", () => {
+        expect(lines(0, 40)).toEqual(["Early", "Mid"]);
+    });
+
+    test("a window inside the first 30 Days still draws its Top X", () => {
+        expect(lines(0, 20)).toEqual(["Early", "Opener"]);
+    });
+
+    test("Pinned Artists are drawn whether or not they're in the Top X", () => {
+        expect(lines(36, 45, 1, [idOf("Opener"), idOf("Mid")])).toEqual(["Mid", "Opener"]);
+    });
+
+    test("is memoised on the integer window bounds, X, rule, pins and tables", () => {
+        const pinned = [idOf("Opener")];
+        const drawn = drawnLines(tables, { start: 35.2, end: 45.1 }, 1, "warm-up", pinned);
+        expect(drawnLines(tables, { start: 35.9, end: 45.8 }, 1, "warm-up", [...pinned])).toBe(
+            drawn,
+        );
+        expect(drawnLines(tables, { start: 36.1, end: 45.8 }, 1, "warm-up", pinned)).not.toBe(
+            drawn,
+        );
+        expect(drawnLines(tables, { start: 35.2, end: 46.1 }, 1, "warm-up", pinned)).not.toBe(
+            drawn,
+        );
+        expect(drawnLines(tables, { start: 35.2, end: 45.1 }, 2, "warm-up", pinned)).not.toBe(
+            drawn,
+        );
+        expect(drawnLines(tables, { start: 35.2, end: 45.1 }, 1, "warm-up", [])).not.toBe(drawn);
+        const rebuilt = { ...tables };
+        expect(drawnLines(rebuilt, { start: 35.2, end: 45.1 }, 1, "warm-up", pinned)).not.toBe(
+            drawn,
+        );
     });
 });
