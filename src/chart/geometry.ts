@@ -1,5 +1,4 @@
 import type { BelowTopX } from "../db";
-import type { DayWindow } from "../standings";
 
 export type Point = [x: number, y: number];
 
@@ -113,11 +112,52 @@ export function dailySegments(
     return segments;
 }
 
-/** `window` moved `by` Days, stopping at Day 0 and `last` without changing its width. */
-export function panned({ start, end }: DayWindow, by: number, last: number): DayWindow {
-    const width = Math.min(end - start, last);
-    const moved = Math.min(Math.max(start + by, 0), last - width);
-    return { start: moved, end: moved + width };
+/** A value `fraction` of the way from `from` to `to`, smoothstepped to follow an S-curve. */
+export function between(from: number, to: number, fraction: number, sCurve: boolean): number {
+    const t = sCurve ? fraction * fraction * (3 - 2 * fraction) : fraction;
+    return from + (to - from) * t;
+}
+
+/** A run of labels stacked `gap` apart from `top`, centred on where its members would sit. */
+interface Stack {
+    members: number[];
+    /** The sum of where its members would sit. */
+    wantedSum: number;
+    top: number;
+}
+
+/**
+ * Label heights `gap` apart at least, between `top` and `bottom`, each overlapping run spread
+ * evenly around where its labels would sit. Returned in the order given, the labels kept in order.
+ */
+export function spreadLabels(ys: readonly number[], gap: number, top: number, bottom: number) {
+    const order = ys.map((_, i) => i).toSorted((a, b) => ys[a]! - ys[b]!);
+    const placed = (members: number[], wantedSum: number): Stack => ({
+        members,
+        wantedSum,
+        top: Math.max(
+            top,
+            Math.min(
+                bottom - (members.length - 1) * gap,
+                wantedSum / members.length - ((members.length - 1) * gap) / 2,
+            ),
+        ),
+    });
+    const stacks = order.reduce<Stack[]>((kept, i) => {
+        let stack = placed([i], ys[i]!);
+        // Merges the new label's stack into the ones above it for as long as they overlap.
+        while (kept.length > 0) {
+            const above = kept.at(-1)!;
+            if (above.top + above.members.length * gap <= stack.top) break;
+            kept.pop();
+            stack = placed([...above.members, ...stack.members], above.wantedSum + stack.wantedSum);
+        }
+        return [...kept, stack];
+    }, []);
+    const spread = Array.from<number>({ length: ys.length });
+    for (const stack of stacks)
+        stack.members.forEach((i, rank) => (spread[i] = stack.top + rank * gap));
+    return spread;
 }
 
 /** How long the Scrobbles axis takes to close about two thirds of the gap to its target. */

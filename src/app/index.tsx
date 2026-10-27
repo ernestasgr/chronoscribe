@@ -15,7 +15,16 @@ export async function boot(root: HTMLElement): Promise<void> {
     const events = createEventBus<IngestEvents>();
     const settings = await createSettings(db);
     const ingest = createIngest({ db, events });
-    const timeline = createTimeline({ build: createWorkerBuild(), events, now: Date.now });
+    const timeline = createTimeline({
+        build: createWorkerBuild(),
+        events,
+        now: Date.now,
+        requestFrame: (callback) => {
+            const frame = requestAnimationFrame(callback);
+            return () => cancelAnimationFrame(frame);
+        },
+        playback: () => settings.store.getState(),
+    });
     const session = createSession({
         db,
         events,

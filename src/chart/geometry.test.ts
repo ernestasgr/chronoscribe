@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { BelowTopX } from "../db";
-import { dailySegments, panned, standingLevel } from "./geometry";
+import { dailySegments, spreadLabels, standingLevel } from "./geometry";
 
 // With X = 10 and 1,000 Artists.
 const levelOf = (below: BelowTopX) => (standing: number) =>
@@ -50,14 +50,16 @@ describe("dailySegments", () => {
     });
 });
 
-describe("panned", () => {
-    test("moves a window by whole and fractional Days without changing its width", () => {
-        expect(panned({ start: 10, end: 30 }, 5.5, 100)).toEqual({ start: 15.5, end: 35.5 });
-        expect(panned({ start: 10, end: 30 }, -4, 100)).toEqual({ start: 6, end: 26 });
+describe("spreadLabels", () => {
+    test("leaves labels that don't overlap where they are", () => {
+        expect(spreadLabels([10, 40, 25], 10, 0, 100)).toEqual([10, 40, 25]);
     });
 
-    test("stops at either end of the history and keeps its width there", () => {
-        expect(panned({ start: 10, end: 30 }, -50, 100)).toEqual({ start: 0, end: 20 });
-        expect(panned({ start: 10, end: 30 }, 500, 100)).toEqual({ start: 80, end: 100 });
+    test("spreads overlapping labels evenly around where they'd sit, keeping their order", () => {
+        expect(spreadLabels([50, 52, 48], 10, 0, 100)).toEqual([50, 60, 40]);
+    });
+
+    test("pushes labels back up from the bottom edge", () => {
+        expect(spreadLabels([95, 97, 99], 10, 0, 100)).toEqual([80, 90, 100]);
     });
 });

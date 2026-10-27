@@ -10,4 +10,5 @@ export { NativeSelect, NativeSelectOption } from "./native-select";
 export { Progress } from "./progress";
 export { Separator } from "./separator";
 export { Slider } from "./slider";
+export { Switch } from "./switch";
 export { cn } from "./utils";

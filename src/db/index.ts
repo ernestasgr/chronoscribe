@@ -52,7 +52,23 @@ export interface AppSettings {
     belowTopX: BelowTopX;
     lineShape: LineShape;
     linesDrawn: LinesRule;
+    /** Whether lines ahead of the playhead are ghosted. */
+    ghostFuture: boolean;
+    /** Playback speed, in seconds per Day. */
+    secondsPerDay: number;
+    /** How many Days the step control and the `,` and `.` keys move by. */
+    stepDays: number;
 }
+
+/** The playback speeds offered, in seconds per Day. */
+export const SECONDS_PER_DAY = { min: 0.02, max: 2 } as const;
+/** The step sizes offered, in Days. */
+export const STEP_DAYS = { min: 1, max: 365 } as const;
+
+/** A playback speed, for the stored row and for what the user types alike. */
+export const SecondsPerDay = z.number().min(SECONDS_PER_DAY.min).max(SECONDS_PER_DAY.max);
+/** A step size, for the stored row and for what the user types alike. */
+export const StepDays = z.number().int().min(STEP_DAYS.min).max(STEP_DAYS.max);
 
 export const DEFAULT_SETTINGS: AppSettings = {
     apiKey: "",
@@ -62,6 +78,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     belowTopX: "gutter",
     lineShape: "s-curves",
     linesDrawn: "warm-up",
+    ghostFuture: true,
+    secondsPerDay: 0.1,
+    stepDays: 1,
 };
 
 /** A stored settings row; anything missing or unknown takes its default, field by field. */
@@ -73,6 +92,9 @@ const SettingsRow = z.object({
     belowTopX: z.enum(BELOW_TOP_X).catch(DEFAULT_SETTINGS.belowTopX),
     lineShape: z.enum(LINE_SHAPES).catch(DEFAULT_SETTINGS.lineShape),
     linesDrawn: z.enum(LINES_RULES).catch(DEFAULT_SETTINGS.linesDrawn),
+    ghostFuture: z.boolean().catch(DEFAULT_SETTINGS.ghostFuture),
+    secondsPerDay: SecondsPerDay.catch(DEFAULT_SETTINGS.secondsPerDay),
+    stepDays: StepDays.catch(DEFAULT_SETTINGS.stepDays),
 });
 
 const SETTINGS_ID = "app";

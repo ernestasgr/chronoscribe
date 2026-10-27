@@ -9,7 +9,7 @@ import {
 } from "d3-shape";
 import type { BelowTopX, LineShape } from "../db";
 import { UNRANKED, valueAt, type StandingsTables } from "../standings";
-import { dailySegments, sCurveSegments, standingLevel, type Point } from "./geometry";
+import { between, dailySegments, sCurveSegments, standingLevel, type Point } from "./geometry";
 
 const PALETTE = [
     "#4e79a7",
@@ -30,8 +30,15 @@ const PALETTE = [
     "#e19d9a",
 ];
 
+/** How faintly lines are drawn ahead of the playhead. */
+const GHOST_ALPHA = 0.22;
+
 /** An Artist's line colour, fixed by its id so it doesn't change as the window moves. */
-const colorOf = (artist: number): string => PALETTE[(artist * 7919) % PALETTE.length]!;
+export const colorOf = (artist: number): string => PALETTE[(artist * 7919) % PALETTE.length]!;
+
+/** Whether lines are drawn as S-curves, which pass between Days rather than through them. */
+const drawsSCurves = (scale: LinesScale): boolean =>
+    scale.yAxis === "standing" && scale.shape === "s-curves";
 
 /** The curves drawn through one point per Day, for every Standing shape but the S-curves. */
 const DAILY_CURVES: Record<Exclude<LineShape, "s-curves">, CurveFactory> = {
@@ -66,6 +73,8 @@ export interface LinesFrame {
     /** The Days to draw, a little wider than the window so lines run off its edges. */
     from: number;
     to: number;
+    /** The pixel x beyond which lines are ghosted, or undefined to draw them all solid. */
+    ghostFrom: number | undefined;
 }
 
 /** An Artist's pixel y on a Day, undefined before their first Scrobble. */
@@ -91,12 +100,36 @@ function artistY(tables: StandingsTables, scale: LinesScale): ArtistY {
     };
 }
 
+/** The plane left and right of `x`, as clip paths that leave the current path alone. */
+function halves(x: number): [behind: Path2D, ahead: Path2D] {
+    const behind = new Path2D();
+    behind.rect(x - 1e6, -1e6, 1e6, 2e6);
+    const ahead = new Path2D();
+    ahead.rect(x, -1e6, 1e6, 2e6);
+    return [behind, ahead];
+}
+
+/** Strokes the current path, solid behind `ghostFrom` and ghosted ahead of it. */
+function strokeGhosted(context: CanvasRenderingContext2D, split: [Path2D, Path2D] | undefined) {
+    if (!split) return context.stroke();
+    const [behind, ahead] = split;
+    context.save();
+    context.clip(behind);
+    context.stroke();
+    context.restore();
+    context.save();
+    context.clip(ahead);
+    context.globalAlpha = GHOST_ALPHA;
+    context.stroke();
+    context.restore();
+}
+
 /** Strokes each drawn Artist's line onto `context` in the shape the scale asks for. */
 export function strokeLines(
     context: CanvasRenderingContext2D,
-    { tables, artists, dayX, scale, from, to }: LinesFrame,
+    { tables, artists, dayX, scale, from, to, ghostFrom }: LinesFrame,
 ): void {
-    const sCurves = scale.yAxis === "standing" && scale.shape === "s-curves";
+    const sCurves = drawsSCurves(scale);
     const curve =
         scale.yAxis === "scrobbles"
             ? curveMonotoneX
@@ -106,12 +139,32 @@ export function strokeLines(
     const segmentsOf = sCurves ? sCurveSegments : dailySegments;
     const path = line<Point>().curve(curve).context(context);
     const yOf = artistY(tables, scale);
+    const split = ghostFrom === undefined ? undefined : halves(ghostFrom);
     for (const artist of artists) {
         context.strokeStyle = colorOf(artist);
         context.beginPath();
         for (const segment of segmentsOf(yOf(artist), dayX, from, to)) path(segment);
-        context.stroke();
+        strokeGhosted(context, split);
     }
+}
+
+/**
+ * An Artist's pixel y at a fractional Day, between its two Days the way its line runs (eased for
+ * S-curves, straight otherwise); undefined before their first Scrobble.
+ */
+export function yAtPlayhead(
+    tables: StandingsTables,
+    scale: LinesScale,
+    artist: number,
+    playhead: number,
+): number | undefined {
+    const yOf = artistY(tables, scale)(artist);
+    const before = Math.floor(playhead);
+    const after = Math.min(before + 1, tables.dayCount - 1);
+    const from = yOf(before);
+    const to = yOf(after);
+    if (from === undefined || to === undefined) return from;
+    return between(from, to, playhead - before, drawsSCurves(scale));
 }
 
 /** The most cumulative Scrobbles any of `artists` has by the end of `day`. */
