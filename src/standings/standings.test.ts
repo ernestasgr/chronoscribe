@@ -8,6 +8,7 @@ import {
     drawnLines,
     topX,
     valueAt,
+    type LinesRule,
     type StandingsTables,
 } from ".";
 
@@ -289,8 +290,14 @@ describe("drawnLines", () => {
         { timeZone: "UTC", today: uts("2026-03-02T12:00:00Z") },
     );
     const idOf = (name: string) => tables.artists.indexOf(name);
-    const lines = (start: number, end: number, x = 1, pinned: number[] = []) =>
-        drawnLines(tables, { start, end }, x, "warm-up", pinned)
+    const lines = (
+        start: number,
+        end: number,
+        x = 1,
+        pinned: number[] = [],
+        rule: LinesRule = "warm-up",
+    ) =>
+        drawnLines(tables, { start, end }, x, rule, pinned)
             .map((id) => tables.artists[id])
             .toSorted();
 
@@ -310,6 +317,24 @@ describe("drawnLines", () => {
 
     test("Pinned Artists are drawn whether or not they're in the Top X", () => {
         expect(lines(36, 45, 1, [idOf("Opener"), idOf("Mid")])).toEqual(["Mid", "Opener"]);
+        expect(lines(36, 45, 1, [idOf("Opener")], "seven-days")).toEqual(["Mid", "Opener"]);
+    });
+
+    test("with no warm-up, the first 30 Days decide lines like any others", () => {
+        expect(lines(0, 40, 1, [], "no-warm-up")).toEqual(["Early", "Mid", "Opener"]);
+    });
+
+    test("the seven-Day rule draws only Artists in the Top X on at least 7 visible Days", () => {
+        // Early leads Days 30–34, Mid 35–49 and Late from Day 50.
+        expect(lines(30, 55, 1, [], "seven-days")).toEqual(["Mid"]);
+        expect(lines(30, 56, 1, [], "seven-days")).toEqual(["Late", "Mid"]);
+        expect(lines(0, 40, 1, [], "seven-days")).toEqual(["Early"]);
+        expect(lines(0, 41, 1, [], "seven-days")).toEqual(["Early", "Mid"]);
+    });
+
+    test("a window under 7 Days long asks the seven-Day rule for every visible Day", () => {
+        expect(lines(48, 51, 1, [], "seven-days")).toEqual([]);
+        expect(lines(56, 60, 1, [], "seven-days")).toEqual(["Late"]);
     });
 
     test("is memoised on the integer window bounds, X, rule, pins and tables", () => {
@@ -328,6 +353,9 @@ describe("drawnLines", () => {
             drawn,
         );
         expect(drawnLines(tables, { start: 35.2, end: 45.1 }, 1, "warm-up", [])).not.toBe(drawn);
+        expect(drawnLines(tables, { start: 35.2, end: 45.1 }, 1, "no-warm-up", pinned)).not.toBe(
+            drawn,
+        );
         const rebuilt = { ...tables };
         expect(drawnLines(rebuilt, { start: 35.2, end: 45.1 }, 1, "warm-up", pinned)).not.toBe(
             drawn,

@@ -63,3 +63,35 @@ test("the wheel zooms and dragging pans the time axis only", async ({ page }) =>
     await expect(focusDay(page).getByRole("heading", { level: 2 })).toHaveText("2026-09-30");
     await expect(marker(page)).toBeHidden();
 });
+
+test("dragging the minimap pans the chart window", async ({ page }) => {
+    await page.clock.setFixedTime(new Date("2026-09-30T12:00:00Z"));
+    await serveLastfm(page, [bristol]);
+    await importListener(page, "Bristol");
+    const minimap = page.getByRole("group", { name: "Minimap" });
+    await expect(minimap.getByRole("img", { name: "Daily volume" })).toBeVisible();
+
+    const box = (await chart(page).boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.wheel(0, -500);
+    await expect.poll(async () => days(await axisSpan(page))).toBeLessThan(60);
+    const zoomed = await axisSpan(page);
+    const window = minimap.getByRole("slider", { name: "Chart window" });
+    const shown = async () =>
+        (await window.getAttribute("aria-valuetext"))!.split(" to ") as [string, string];
+    const zoomedWindow = await shown();
+
+    const handle = (await window.boundingBox())!;
+    const map = (await minimap.boundingBox())!;
+    await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(map.x + 4, handle.y + handle.height / 2, { steps: 5 });
+    await page.mouse.up();
+
+    await expect.poll(async () => (await axisSpan(page))[0] < zoomed[0]).toBe(true);
+    expect((await shown())[0]).toBe("2026-07-01");
+    // The window's fractional bounds are labelled as whole Days, so its width can round by one.
+    expect(Math.abs(days(await shown()) - days(zoomedWindow))).toBeLessThanOrEqual(1);
+    await expect(timeAxis(page).getByText("2026-07-01", { exact: true })).toBeVisible();
+    await expect(focusDay(page).getByRole("heading", { level: 2 })).toHaveText("2026-09-30");
+});
