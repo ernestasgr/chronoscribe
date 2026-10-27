@@ -52,8 +52,8 @@ export interface AppSettings {
     belowTopX: BelowTopX;
     lineShape: LineShape;
     linesDrawn: LinesRule;
-    /** Whether lines ahead of the playhead are ghosted. */
-    ghostFuture: boolean;
+    /** Whether lines ahead of the playhead are hidden, so the future isn't given away. */
+    hideFuture: boolean;
     /** Playback speed, in seconds per Day. */
     secondsPerDay: number;
     /** How many Days the step control and the `,` and `.` keys move by. */
@@ -78,7 +78,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     belowTopX: "gutter",
     lineShape: "s-curves",
     linesDrawn: "warm-up",
-    ghostFuture: true,
+    hideFuture: true,
     secondsPerDay: 0.1,
     stepDays: 1,
 };
@@ -92,7 +92,7 @@ const SettingsRow = z.object({
     belowTopX: z.enum(BELOW_TOP_X).catch(DEFAULT_SETTINGS.belowTopX),
     lineShape: z.enum(LINE_SHAPES).catch(DEFAULT_SETTINGS.lineShape),
     linesDrawn: z.enum(LINES_RULES).catch(DEFAULT_SETTINGS.linesDrawn),
-    ghostFuture: z.boolean().catch(DEFAULT_SETTINGS.ghostFuture),
+    hideFuture: z.boolean().catch(DEFAULT_SETTINGS.hideFuture),
     secondsPerDay: SecondsPerDay.catch(DEFAULT_SETTINGS.secondsPerDay),
     stepDays: StepDays.catch(DEFAULT_SETTINGS.stepDays),
 });

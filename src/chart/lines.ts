@@ -9,7 +9,7 @@ import {
 } from "d3-shape";
 import type { BelowTopX, LineShape } from "../db";
 import { UNRANKED, valueAt, type StandingsTables } from "../standings";
-import { between, dailySegments, sCurveSegments, standingLevel, type Point } from "./geometry";
+import { dailySegments, sCurveSegments, standingLevel, yAlong, type Point } from "./geometry";
 
 const PALETTE = [
     "#4e79a7",
@@ -29,9 +29,6 @@ const PALETTE = [
     "#86bcb6",
     "#e19d9a",
 ];
-
-/** How faintly lines are drawn ahead of the playhead. */
-const GHOST_ALPHA = 0.22;
 
 /** An Artist's line colour, fixed by its id so it doesn't change as the window moves. */
 export const colorOf = (artist: number): string => PALETTE[(artist * 7919) % PALETTE.length]!;
@@ -73,8 +70,6 @@ export interface LinesFrame {
     /** The Days to draw, a little wider than the window so lines run off its edges. */
     from: number;
     to: number;
-    /** The pixel x beyond which lines are ghosted, or undefined to draw them all solid. */
-    ghostFrom: number | undefined;
 }
 
 /** An Artist's pixel y on a Day, undefined before their first Scrobble. */
@@ -100,72 +95,54 @@ function artistY(tables: StandingsTables, scale: LinesScale): ArtistY {
     };
 }
 
-/** The plane left and right of `x`, as clip paths that leave the current path alone. */
-function halves(x: number): [behind: Path2D, ahead: Path2D] {
-    const behind = new Path2D();
-    behind.rect(x - 1e6, -1e6, 1e6, 2e6);
-    const ahead = new Path2D();
-    ahead.rect(x, -1e6, 1e6, 2e6);
-    return [behind, ahead];
+/** Each drawn Artist's line as runs of pixel points, in the shape the scale asks for. */
+export type LinesGeometry = ReadonlyMap<number, Point[][]>;
+
+/** The points of every drawn line in this frame, shared by the strokes and the dots that ride them. */
+export function linesGeometry({
+    tables,
+    artists,
+    dayX,
+    scale,
+    from,
+    to,
+}: LinesFrame): LinesGeometry {
+    const segmentsOf = drawsSCurves(scale) ? sCurveSegments : dailySegments;
+    const yOf = artistY(tables, scale);
+    return new Map(artists.map((artist) => [artist, segmentsOf(yOf(artist), dayX, from, to)]));
 }
 
-/** Strokes the current path, solid behind `ghostFrom` and ghosted ahead of it. */
-function strokeGhosted(context: CanvasRenderingContext2D, split: [Path2D, Path2D] | undefined) {
-    if (!split) return context.stroke();
-    const [behind, ahead] = split;
-    context.save();
-    context.clip(behind);
-    context.stroke();
-    context.restore();
-    context.save();
-    context.clip(ahead);
-    context.globalAlpha = GHOST_ALPHA;
-    context.stroke();
-    context.restore();
-}
-
-/** Strokes each drawn Artist's line onto `context` in the shape the scale asks for. */
+/** Strokes each line of `geometry` onto `context` with the curve the scale asks for. */
 export function strokeLines(
     context: CanvasRenderingContext2D,
-    { tables, artists, dayX, scale, from, to, ghostFrom }: LinesFrame,
+    geometry: LinesGeometry,
+    scale: LinesScale,
 ): void {
-    const sCurves = drawsSCurves(scale);
     const curve =
         scale.yAxis === "scrobbles"
             ? curveMonotoneX
             : scale.shape === "s-curves"
               ? curveBumpX
               : DAILY_CURVES[scale.shape];
-    const segmentsOf = sCurves ? sCurveSegments : dailySegments;
     const path = line<Point>().curve(curve).context(context);
-    const yOf = artistY(tables, scale);
-    const split = ghostFrom === undefined ? undefined : halves(ghostFrom);
-    for (const artist of artists) {
+    for (const [artist, segments] of geometry) {
         context.strokeStyle = colorOf(artist);
         context.beginPath();
-        for (const segment of segmentsOf(yOf(artist), dayX, from, to)) path(segment);
-        strokeGhosted(context, split);
+        for (const segment of segments) path(segment);
+        context.stroke();
     }
 }
 
-/**
- * An Artist's pixel y at a fractional Day, between its two Days the way its line runs (eased for
- * S-curves, straight otherwise); undefined before their first Scrobble.
- */
-export function yAtPlayhead(
-    tables: StandingsTables,
+/** Where an Artist's drawn line is at pixel `x`, or undefined if it isn't drawn there. */
+export const yOnLine = (
+    geometry: LinesGeometry,
     scale: LinesScale,
     artist: number,
-    playhead: number,
-): number | undefined {
-    const yOf = artistY(tables, scale)(artist);
-    const before = Math.floor(playhead);
-    const after = Math.min(before + 1, tables.dayCount - 1);
-    const from = yOf(before);
-    const to = yOf(after);
-    if (from === undefined || to === undefined) return from;
-    return between(from, to, playhead - before, drawsSCurves(scale));
-}
+    x: number,
+): number | undefined => {
+    const segments = geometry.get(artist);
+    return segments && yAlong(segments, x, drawsSCurves(scale));
+};
 
 /** The most cumulative Scrobbles any of `artists` has by the end of `day`. */
 export const mostScrobbles = (

@@ -79,12 +79,12 @@ export function Dashboard({ username }: { username: string }) {
     const x = useSettings((settings) => settings.x);
     const mode = useSettings((settings) => settings.climbers);
     const options = useSettings(
-        useShallow(({ yAxis, belowTopX, lineShape, linesDrawn, ghostFuture }): ChartOptions => ({
+        useShallow(({ yAxis, belowTopX, lineShape, linesDrawn, hideFuture }): ChartOptions => ({
             yAxis,
             belowTopX,
             lineShape,
             linesDrawn,
-            ghostFuture,
+            hideFuture,
         })),
     );
     const day = useFocusDay();
@@ -226,11 +226,11 @@ function Toolbar({
             />
             <div className="flex items-center gap-2">
                 <Switch
-                    id="ghost-future"
-                    checked={options.ghostFuture}
-                    onCheckedChange={(ghostFuture) => settings.update({ ghostFuture })}
+                    id="hide-future"
+                    checked={options.hideFuture}
+                    onCheckedChange={(hideFuture) => settings.update({ hideFuture })}
                 />
-                <Label htmlFor="ghost-future">Ghost the future</Label>
+                <Label htmlFor="hide-future">Hide the future</Label>
             </div>
         </header>
     );

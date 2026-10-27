@@ -42,6 +42,39 @@ function gutterLevel(standing: number, x: number, artistCount: number): number {
 /** The level at which the gutter band begins, just under #X's row. */
 export const GUTTER_TOP = 1 - GUTTER_SHARE;
 
+/** How close two curves' ends must be to count as touching rather than overlapping. */
+const TOUCH_PX = 0.5;
+
+/** The share of a bump-x curve's width covered at progress `u` along it, both from 0 to 1. */
+const bumpXFraction = (u: number) => 1.5 * u * (1 - u) + u ** 3;
+
+/** The progress `u` along a bump-x curve at `fraction` of its width, by bisection. */
+function bumpProgress(fraction: number): number {
+    let [low, high] = [0, 1];
+    for (let i = 0; i < 20; i++) {
+        const u = (low + high) / 2;
+        if (bumpXFraction(u) < fraction) low = u;
+        else high = u;
+    }
+    return (low + high) / 2;
+}
+
+/**
+ * The height of a drawn line at pixel `x`, along its S-curves (bump-x) or its straight segments;
+ * undefined where the line breaks or ends. This keeps a playhead's dot on the line it rides.
+ */
+export function yAlong(segments: readonly Point[][], x: number, sCurve: boolean) {
+    const run = segments.find((r) => x >= r[0]![0] - TOUCH_PX && x <= r.at(-1)![0] + TOUCH_PX);
+    if (!run) return undefined;
+    const next = run.findIndex(([px]) => px >= x);
+    if (next <= 0) return run.at(next)![1];
+    const [[ax, ay], [bx, by]] = [run[next - 1]!, run[next]!];
+    const fraction = (x - ax) / (bx - ax);
+    if (!sCurve) return ay + (by - ay) * fraction;
+    const u = bumpProgress(fraction);
+    return ay + (by - ay) * (3 * u * u - 2 * u ** 3);
+}
+
 /**
  * One line over Days `from`..`to` as runs of points, to be drawn with a bump-x curve: consecutive
  * points at the same height are a flat run, at different heights an S-curve at least
@@ -76,10 +109,12 @@ export function sCurveSegments(
             const after = x(day);
             const mid = (before + after) / 2;
             const half = Math.max((after - before) / 2, MIN_CURVE_PX / 2);
+            const start = mid - half;
             const last = run.at(-1)!;
-            // Changes closer together than a curve's width curve straight on from the last one.
-            if (mid - half > last[0]) run.push([mid - half, held.y]);
-            else if (run.length > 1) run.pop();
+            // Changes closer together than a curve's width curve straight on from the last one;
+            // curves that only touch, as on Days wider than a curve, each keep their Day's level.
+            if (start > last[0] + TOUCH_PX) run.push([start, held.y]);
+            else if (start < last[0] - TOUCH_PX && run.length > 1) run.pop();
             run.push([mid + half, current]);
         }
         held = { day, y: current };
@@ -110,12 +145,6 @@ export function dailySegments(
     }
     if (run.length > 0) segments.push(run);
     return segments;
-}
-
-/** A value `fraction` of the way from `from` to `to`, smoothstepped to follow an S-curve. */
-export function between(from: number, to: number, fraction: number, sCurve: boolean): number {
-    const t = sCurve ? fraction * fraction * (3 - 2 * fraction) : fraction;
-    return from + (to - from) * t;
 }
 
 /** A run of labels stacked `gap` apart from `top`, centred on where its members would sit. */

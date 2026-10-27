@@ -8,14 +8,22 @@ import { dayDate, drawnLines, topX, type DayWindow, type StandingsTables } from 
 import { useFocusDay, useTimeline, type Timeline } from "../timeline";
 import { easeToward, GUTTER_TOP, logStandingTicks, spreadLabels, standingLevel } from "./geometry";
 import { dayScale, plotOf, useSize, type Plot, type Size } from "./layout";
-import { colorOf, mostScrobbles, strokeLines, yAtPlayhead, type LinesScale } from "./lines";
+import {
+    colorOf,
+    linesGeometry,
+    mostScrobbles,
+    strokeLines,
+    yOnLine,
+    type LinesGeometry,
+    type LinesScale,
+} from "./lines";
 
 export { Minimap } from "./minimap";
 
 /** The chart settings, all app-wide. */
 export type ChartOptions = Pick<
     AppSettings,
-    "yAxis" | "belowTopX" | "lineShape" | "linesDrawn" | "ghostFuture"
+    "yAxis" | "belowTopX" | "lineShape" | "linesDrawn" | "hideFuture"
 >;
 
 /** Half a date label's width, so labels centred on a Day stay inside the chart. */
@@ -25,12 +33,14 @@ const MIN_WINDOW_DAYS = 14;
 /** The least room a Standing label needs, in pixels. */
 const LABEL_PX = 14;
 const NO_PINS: readonly number[] = [];
-/** The least room between two Artist labels, in pixels. */
-const ARTIST_LABEL_PX = 13;
+/** The height of an Artist label's box, and so the least room between two labels, in pixels. */
+const ARTIST_LABEL_PX = 18;
 /** The room an Artist label needs right of its dot; nearer the edge it flips to the left. */
-const ARTIST_LABEL_ROOM = 140;
-/** How far an Artist's name sits from its dot. */
-const ARTIST_LABEL_OFFSET = 7;
+const ARTIST_LABEL_ROOM = 160;
+/** How far an Artist's label box starts from its dot. */
+const ARTIST_LABEL_OFFSET = 10;
+/** The padding either side of an Artist's name inside its box. */
+const ARTIST_LABEL_PAD = 5;
 
 /**
  * The top of the Scrobbles axis as it eases, shared by the canvas loop and the axis labels. It
@@ -119,9 +129,9 @@ const fittedDay = (playhead: number, from: number, to: number) =>
     Math.min(to, Math.max(from, Math.floor(playhead)));
 
 /**
- * Paints whenever the view changes, at most once per frame: the lines on the canvas, solid behind
- * the playhead and ghosted ahead of it if asked, then the time axis, the Focus Day marker and the
- * Artist labels riding the lines at the playhead. In Scrobbles mode it keeps painting while the
+ * Paints whenever the view changes, at most once per frame: the lines on the canvas, stopping at
+ * the playhead if the future is hidden, then the time axis, the Focus Day marker and the Artist
+ * labels riding the lines at the playhead. In Scrobbles mode it keeps painting while the
  * axis eases toward the most Scrobbles drawn up to the playhead.
  */
 function useFrames(
@@ -130,7 +140,7 @@ function useFrames(
     { timeAxis, marker, labels }: PaintedParts,
     tables: StandingsTables,
     x: number,
-    { yAxis, belowTopX, lineShape, linesDrawn, ghostFuture }: ChartOptions,
+    { yAxis, belowTopX, lineShape, linesDrawn, hideFuture }: ChartOptions,
     size: Size | undefined,
     scrobblesTop: ScrobblesTop,
 ) {
@@ -143,6 +153,10 @@ function useFrames(
         const levelY = levelScale(plot);
         const last = tables.dayCount - 1;
         let frame: number | undefined;
+        // Each name's rendered width, measured once per element since its text never changes.
+        const nameWidths = new WeakMap<SVGTextElement, number>();
+        const widthOf = (name: SVGTextElement) =>
+            nameWidths.get(name) ?? nameWidths.set(name, name.getComputedTextLength()).get(name)!;
         // Ticks laid out from older tables would keep their old dates.
         if (timeAxis.current) select(timeAxis.current).selectAll("text").remove();
 
@@ -178,7 +192,7 @@ function useFrames(
             const { window, playhead } = getView();
             const dayX = dayScale(window, plot);
             const from = Math.max(0, Math.floor(window.start) - 1);
-            const to = Math.min(last, Math.ceil(window.end) + 1);
+            const to = Math.min(last, Math.ceil(hideFuture ? playhead : window.end) + 1);
             const artists = drawnLines(tables, window, x, linesDrawn, NO_PINS);
             const scale = scaleOf(artists, fittedDay(playhead, from, to), now);
             const playheadX = dayX(playhead);
@@ -187,34 +201,28 @@ function useFrames(
             context.clearRect(0, 0, size.width, size.height);
             context.save();
             context.beginPath();
+            // Hiding the future is clipping the lines at the playhead.
+            const right = hideFuture ? Math.min(plot.right, playheadX) : plot.right;
             context.rect(
                 plot.left,
                 plot.top - 4,
-                plot.right - plot.left,
+                Math.max(0, right - plot.left),
                 plot.bottom - plot.top + 8,
             );
             context.clip();
             context.lineWidth = 1.8;
-            strokeLines(context, {
-                tables,
-                artists,
-                dayX,
-                scale,
-                from,
-                to,
-                ghostFrom: ghostFuture ? playheadX : undefined,
-            });
+            const geometry = linesGeometry({ tables, artists, dayX, scale, from, to });
+            strokeLines(context, geometry, scale);
             context.restore();
             if (timeAxis.current) placeTimeAxis(timeAxis.current, tables, dayX, size);
             if (marker.current) placeMarker(marker.current, playheadX, inView, size);
             if (labels.current)
                 placeLabels(labels.current, {
-                    tables,
-                    artists,
+                    geometry,
                     scale,
-                    playhead,
                     playheadX: inView ? playheadX : undefined,
                     plot,
+                    widthOf,
                 });
         };
 
@@ -238,7 +246,7 @@ function useFrames(
         belowTopX,
         lineShape,
         linesDrawn,
-        ghostFuture,
+        hideFuture,
         size,
         scrobblesTop,
     ]);
@@ -276,31 +284,30 @@ function placeMarker(group: SVGGElement, x: number, inView: boolean, size: Size)
 }
 
 interface LabelsFrame {
-    tables: StandingsTables;
-    artists: readonly number[];
+    geometry: LinesGeometry;
     scale: LinesScale;
-    playhead: number;
     /** The playhead's pixel x, or undefined while it is out of view. */
     playheadX: number | undefined;
     plot: Plot;
+    /** A name's rendered width, for its box. */
+    widthOf: (name: SVGTextElement) => number;
 }
 
 /**
- * Puts each labelled Artist's dot on its line at the playhead and its name beside it, the names
- * pushed apart so they don't overlap. Labels without a line there, or out of view, are hidden.
+ * Puts each labelled Artist's dot on its line at the playhead and its boxed name beside it, the
+ * boxes pushed apart so they don't overlap, with a leader back to the dot. Labels without a line
+ * there, or out of view, are hidden.
  */
 function placeLabels(
     group: SVGGElement,
-    { tables, artists, scale, playhead, playheadX, plot }: LabelsFrame,
+    { geometry, scale, playheadX, plot, widthOf }: LabelsFrame,
 ) {
-    const drawn = new Set(artists);
     const items = [...group.children].filter((item) => item instanceof SVGGElement);
-    const ys = items.map((item) => {
-        const artist = Number(item.dataset.artist);
-        return playheadX !== undefined && drawn.has(artist)
-            ? yAtPlayhead(tables, scale, artist, playhead)
-            : undefined;
-    });
+    const ys = items.map((item) =>
+        playheadX === undefined
+            ? undefined
+            : yOnLine(geometry, scale, Number(item.dataset.artist), playheadX),
+    );
     const spread = spreadLabels(
         ys.filter((y) => y !== undefined),
         ARTIST_LABEL_PX,
@@ -313,12 +320,22 @@ function placeLabels(
         const y = ys[i];
         item.style.display = y === undefined ? "none" : "";
         if (y === undefined) return;
-        const nameY = spread[placed++]!;
+        const shift = spread[placed++]! - y;
+        const side = flipped ? -1 : 1;
         item.setAttribute("transform", `translate(${playheadX},${y})`);
+        const leader = item.querySelector("line");
+        leader?.setAttribute("x2", String(side * ARTIST_LABEL_OFFSET));
+        leader?.setAttribute("y2", String(shift));
         const name = item.querySelector("text");
-        name?.setAttribute("x", String(flipped ? -ARTIST_LABEL_OFFSET : ARTIST_LABEL_OFFSET));
-        name?.setAttribute("y", String(nameY - y));
-        name?.setAttribute("text-anchor", flipped ? "end" : "start");
+        const box = item.querySelector("rect");
+        if (!name || !box) return;
+        const boxWidth = widthOf(name) + 2 * ARTIST_LABEL_PAD;
+        const boxLeft = flipped ? -ARTIST_LABEL_OFFSET - boxWidth : ARTIST_LABEL_OFFSET;
+        box.setAttribute("x", String(boxLeft));
+        box.setAttribute("y", String(shift - (ARTIST_LABEL_PX - 2) / 2));
+        box.setAttribute("width", String(boxWidth));
+        name.setAttribute("x", String(boxLeft + ARTIST_LABEL_PAD));
+        name.setAttribute("y", String(shift));
     });
 }
 
@@ -458,16 +475,24 @@ function ArtistLabels({
     group: RefObject<SVGGElement | null>;
 }) {
     return (
-        <g ref={group} role="group" aria-label="Artist labels" className="font-medium">
+        <g ref={group} role="group" aria-label="Artist labels" className="text-xs font-semibold">
             {topX(tables, day, x).map((row) => (
                 <g key={row.id} data-artist={row.id}>
-                    <circle r={3.5} fill={colorOf(row.id)} />
-                    <text
-                        dominantBaseline="middle"
-                        className="fill-foreground stroke-background"
-                        strokeWidth={3}
-                        paintOrder="stroke"
-                    >
+                    <line stroke={colorOf(row.id)} strokeWidth={1} />
+                    <rect
+                        height={ARTIST_LABEL_PX - 2}
+                        rx={4}
+                        stroke={colorOf(row.id)}
+                        strokeWidth={1.5}
+                        className="fill-card/90"
+                    />
+                    <circle
+                        r={4}
+                        fill={colorOf(row.id)}
+                        strokeWidth={1.5}
+                        className="stroke-card"
+                    />
+                    <text dominantBaseline="central" className="fill-foreground">
                         {row.artist}
                     </text>
                 </g>

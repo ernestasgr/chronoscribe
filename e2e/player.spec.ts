@@ -47,6 +47,33 @@ test("Space plays the history at the chosen speed and pauses it", async ({ page 
     await expect(button(page, "Play")).toBeVisible();
 });
 
+/** How many painted pixels the chart's canvas has right of the Focus Day marker. */
+const paintedAhead = (page: Page) =>
+    page.evaluate(() => {
+        const canvas = document.querySelector<HTMLCanvasElement>("figure canvas")!;
+        const marker = document.querySelector('[aria-label="Focus Day marker"] line')!;
+        const scale = canvas.width / canvas.getBoundingClientRect().width;
+        const markerX = marker.getBoundingClientRect().left - canvas.getBoundingClientRect().left;
+        const left = Math.ceil((markerX + 3) * scale);
+        const { data } = canvas
+            .getContext("2d")!
+            .getImageData(left, 0, canvas.width - left, canvas.height);
+        return data.filter((_, i) => i % 4 === 3 && data[i]! > 0).length;
+    });
+
+test("the future is hidden ahead of the playhead until switched off", async ({ page }) => {
+    await openWithClock(page);
+    await focusOn(page, "2026-07-02", FIRST_DAY);
+    const hide = page.getByRole("switch", { name: "Hide the future" });
+    await expect(hide).toBeChecked();
+    expect(await paintedAhead(page)).toBe(0);
+
+    await hide.click();
+    await expect.poll(() => paintedAhead(page)).toBeGreaterThan(0);
+    await page.reload();
+    await expect(page.getByRole("switch", { name: "Hide the future" })).not.toBeChecked();
+});
+
 test("stepping glides by the step size, which survives a reload", async ({ page }) => {
     await openWithClock(page);
     await focusOn(page, "2026-07-03", FIRST_DAY);
