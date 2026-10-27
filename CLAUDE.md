@@ -1,3 +1,7 @@
+## Coding standards
+
+Read `docs/agents/coding-standards.md` before writing or reviewing code. It holds the stack, module layering, functional and event-driven architecture, state, error, UI and testing principles that every change follows, whatever a ticket's checkboxes say.
+
 ## Agent skills
 
 ### Issue tracker
