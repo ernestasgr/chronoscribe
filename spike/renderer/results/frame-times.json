@@ -5,33 +5,64 @@
       "work": {
         "median": 0.2,
         "p95": 0.5,
-        "max": 1.3,
-        "mean": 0.2
+        "max": 1.1,
+        "mean": 0.21
       },
       "interval": {
         "median": 16.7,
-        "p95": 16.7,
+        "p95": 16.8,
         "max": 16.8,
         "mean": 16.67
       },
       "maxLines": 44
     },
     "real": {
-      "frames": 401,
+      "wallMs": 4565,
+      "frames": 274,
       "median": 16.7,
       "p95": 16.7,
       "max": 16.8,
-      "over16ms": 0
+      "droppedFrames": 0,
+      "probes": {
+        "zoomedIn": {
+          "view": [
+            1561,
+            2178
+          ],
+          "lines": 11
+        },
+        "pannedBack": {
+          "view": [
+            1041,
+            1658
+          ],
+          "lines": 11
+        },
+        "pannedForward": {
+          "view": [
+            1561,
+            2178
+          ],
+          "lines": 11
+        },
+        "zoomedOut": {
+          "view": [
+            0,
+            2338
+          ],
+          "lines": 44
+        }
+      }
     }
   },
   "d3 @4x": {
     "scripted": {
       "frames": 720,
       "work": {
-        "median": 1,
-        "p95": 3.8,
-        "max": 8.9,
-        "mean": 1.3
+        "median": 0.8,
+        "p95": 2.8,
+        "max": 7.3,
+        "mean": 1.12
       },
       "interval": {
         "median": 16.7,
@@ -42,21 +73,52 @@
       "maxLines": 44
     },
     "real": {
-      "frames": 401,
+      "wallMs": 4567,
+      "frames": 273,
       "median": 16.7,
-      "p95": 16.8,
+      "p95": 16.7,
       "max": 16.8,
-      "over16ms": 0
+      "droppedFrames": 0,
+      "probes": {
+        "zoomedIn": {
+          "view": [
+            1561,
+            2178
+          ],
+          "lines": 11
+        },
+        "pannedBack": {
+          "view": [
+            1041,
+            1658
+          ],
+          "lines": 11
+        },
+        "pannedForward": {
+          "view": [
+            1561,
+            2178
+          ],
+          "lines": 11
+        },
+        "zoomedOut": {
+          "view": [
+            0,
+            2338
+          ],
+          "lines": 44
+        }
+      }
     }
   },
   "echarts-line @1x": {
     "scripted": {
       "frames": 720,
       "work": {
-        "median": 2.8,
-        "p95": 5,
-        "max": 8,
-        "mean": 3.07
+        "median": 2.9,
+        "p95": 5.1,
+        "max": 7.9,
+        "mean": 3.18
       },
       "interval": {
         "median": 16.7,
@@ -67,36 +129,98 @@
       "maxLines": 44
     },
     "real": {
-      "frames": 400,
+      "wallMs": 4558,
+      "frames": 273,
       "median": 16.7,
       "p95": 16.7,
       "max": 16.8,
-      "over16ms": 0
+      "droppedFrames": 0,
+      "probes": {
+        "zoomedIn": {
+          "view": [
+            1153,
+            2244
+          ],
+          "lines": 11
+        },
+        "pannedBack": {
+          "view": [
+            221,
+            1312
+          ],
+          "lines": 15
+        },
+        "pannedForward": {
+          "view": [
+            1154,
+            2244
+          ],
+          "lines": 11
+        },
+        "zoomedOut": {
+          "view": [
+            1089,
+            2338
+          ],
+          "lines": 11
+        }
+      }
     }
   },
   "echarts-line @4x": {
     "scripted": {
       "frames": 720,
       "work": {
-        "median": 15.5,
-        "p95": 29.1,
-        "max": 37.7,
-        "mean": 17.28
+        "median": 15.9,
+        "p95": 29.2,
+        "max": 35.7,
+        "mean": 17.51
       },
       "interval": {
         "median": 16.7,
         "p95": 33.4,
         "max": 50.1,
-        "mean": 20
+        "mean": 20.14
       },
       "maxLines": 44
     },
     "real": {
-      "frames": 643,
+      "wallMs": 8609,
+      "frames": 515,
       "median": 16.7,
-      "p95": 16.8,
-      "max": 33.3,
-      "over16ms": 1
+      "p95": 16.7,
+      "max": 33.2,
+      "droppedFrames": 1,
+      "probes": {
+        "zoomedIn": {
+          "view": [
+            1153,
+            2244
+          ],
+          "lines": 11
+        },
+        "pannedBack": {
+          "view": [
+            221,
+            1312
+          ],
+          "lines": 15
+        },
+        "pannedForward": {
+          "view": [
+            1154,
+            2244
+          ],
+          "lines": 11
+        },
+        "zoomedOut": {
+          "view": [
+            1089,
+            2338
+          ],
+          "lines": 11
+        }
+      }
     }
   },
   "echarts-custom @1x": {
@@ -105,48 +229,110 @@
       "work": {
         "median": 2.2,
         "p95": 3.4,
-        "max": 6.3,
-        "mean": 2.38
+        "max": 6.1,
+        "mean": 2.37
       },
       "interval": {
         "median": 16.7,
-        "p95": 16.7,
+        "p95": 16.8,
         "max": 16.8,
         "mean": 16.67
       },
       "maxLines": 44
     },
     "real": {
-      "frames": 400,
+      "wallMs": 4557,
+      "frames": 273,
       "median": 16.7,
       "p95": 16.7,
       "max": 16.8,
-      "over16ms": 0
+      "droppedFrames": 0,
+      "probes": {
+        "zoomedIn": {
+          "view": [
+            1153,
+            2244
+          ],
+          "lines": 11
+        },
+        "pannedBack": {
+          "view": [
+            221,
+            1312
+          ],
+          "lines": 15
+        },
+        "pannedForward": {
+          "view": [
+            1154,
+            2244
+          ],
+          "lines": 11
+        },
+        "zoomedOut": {
+          "view": [
+            1089,
+            2338
+          ],
+          "lines": 11
+        }
+      }
     }
   },
   "echarts-custom @4x": {
     "scripted": {
       "frames": 720,
       "work": {
-        "median": 12.3,
-        "p95": 18.5,
-        "max": 28.9,
-        "mean": 13.38
+        "median": 12.6,
+        "p95": 18.8,
+        "max": 32.5,
+        "mean": 13.7
       },
       "interval": {
         "median": 16.7,
         "p95": 33.3,
         "max": 33.4,
-        "mean": 18.01
+        "mean": 18.1
       },
       "maxLines": 44
     },
     "real": {
-      "frames": 550,
+      "wallMs": 8610,
+      "frames": 515,
       "median": 16.7,
-      "p95": 16.8,
+      "p95": 16.7,
       "max": 33.2,
-      "over16ms": 1
+      "droppedFrames": 1,
+      "probes": {
+        "zoomedIn": {
+          "view": [
+            1153,
+            2244
+          ],
+          "lines": 11
+        },
+        "pannedBack": {
+          "view": [
+            221,
+            1312
+          ],
+          "lines": 15
+        },
+        "pannedForward": {
+          "view": [
+            1154,
+            2244
+          ],
+          "lines": 11
+        },
+        "zoomedOut": {
+          "view": [
+            1089,
+            2338
+          ],
+          "lines": 11
+        }
+      }
     }
   }
 }

@@ -133,5 +133,6 @@ export function mountECharts(host: HTMLElement, tables: StandingsTables, mode: E
       chart.getZr().flush();
     },
     drawn: () => lines,
+    view: () => [view.from, view.to],
   };
 }

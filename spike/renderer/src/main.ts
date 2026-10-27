@@ -4,21 +4,21 @@ import { mountD3 } from "./d3";
 import { mountECharts } from "./echarts";
 import { loadTables, type Renderer } from "./model";
 
-type Window = [from: number, to: number];
+type DayWindow = [from: number, to: number];
 
 /** Zoom from the full history into 90 Days, pan them across it, widen to a year, pan back, zoom out. */
-function script(dayCount: number): Window[] {
+function script(dayCount: number): DayWindow[] {
   const last = dayCount - 1;
-  const tween = (a: Window, b: Window, frames: number): Window[] =>
+  const tween = (a: DayWindow, b: DayWindow, frames: number): DayWindow[] =>
     Array.from({ length: frames }, (_, i) => {
       const k = (i + 1) / frames;
       return [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k];
     });
-  const full: Window = [0, last];
-  const quarterAtEnd: Window = [last - 90, last];
-  const quarterAtStart: Window = [0, 90];
-  const yearAtStart: Window = [0, 365];
-  const yearAtEnd: Window = [last - 365, last];
+  const full: DayWindow = [0, last];
+  const quarterAtEnd: DayWindow = [last - 90, last];
+  const quarterAtStart: DayWindow = [0, 90];
+  const yearAtStart: DayWindow = [0, 365];
+  const yearAtEnd: DayWindow = [last - 365, last];
   return [
     ...tween(full, quarterAtEnd, 120),
     ...tween(quarterAtEnd, quarterAtStart, 240),
@@ -70,5 +70,6 @@ document.getElementById("title")!.textContent =
 Object.assign(window, {
   bench: () => bench(renderer, tables.dayCount),
   show: (from: number, to: number) => renderer.show(from, to),
+  probe: () => ({ view: renderer.view().map(Math.round), lines: renderer.drawn() }),
   ready: true,
 });

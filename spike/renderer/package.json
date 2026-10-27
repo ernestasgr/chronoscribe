@@ -6,6 +6,7 @@
   "scripts": {
     "data": "node scripts/data.mjs",
     "dev": "node scripts/data.mjs && vite",
+    "test": "vitest run",
     "bench": "node scripts/data.mjs && playwright test -c playwright.config.ts"
   },
   "dependencies": {

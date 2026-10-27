@@ -55,4 +55,6 @@ export interface Renderer {
   show(from: number, to: number): void;
   /** Lines drawn in the current window. */
   drawn(): number;
+  /** The visible Day window. */
+  view(): [from: number, to: number];
 }

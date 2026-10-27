@@ -22,8 +22,10 @@ export function mountD3(host: HTMLElement, tables: StandingsTables): Renderer {
   const y = scaleLinear().domain([0.5, X + 0.5]).range([plot.top, plot.bottom]);
   const bump = line<Point>().curve(curveBumpX).context(g);
   let lines = 0;
+  let view: [number, number] = [0, tables.dayCount - 1];
 
   const draw = (from: number, to: number) => {
+    view = [from, to];
     const x = scaleLinear().domain([from, to]).range([plot.left, plot.right]);
     g.clearRect(0, 0, width, height);
     g.font = "11px system-ui";
@@ -74,5 +76,6 @@ export function mountD3(host: HTMLElement, tables: StandingsTables): Renderer {
       selection.call(behaviour.transform, zoomIdentity.translate(plot.left, 0).scale(k).translate(-full(from), 0));
     },
     drawn: () => lines,
+    view: () => view,
   };
 }
