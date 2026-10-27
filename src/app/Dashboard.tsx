@@ -1,5 +1,6 @@
 import { ChevronRightIcon } from "lucide-react";
-import { Chart } from "../chart";
+import { useShallow } from "zustand/react/shallow";
+import { Chart, Minimap, type ChartOptions } from "../chart";
 import {
     climbers,
     climbersCut,
@@ -37,6 +38,14 @@ export function Dashboard({ username }: { username: string }) {
     const tables = useTables();
     const x = useSettings((settings) => settings.x);
     const mode = useSettings((settings) => settings.climbers);
+    const options = useSettings(
+        useShallow(({ yAxis, belowTopX, lineShape, linesDrawn }): ChartOptions => ({
+            yAxis,
+            belowTopX,
+            lineShape,
+            linesDrawn,
+        })),
+    );
     const day = useFocusDay();
 
     if (!tables)
@@ -50,9 +59,17 @@ export function Dashboard({ username }: { username: string }) {
 
     return (
         <main className="grid min-h-svh grid-rows-[auto_minmax(20rem,1fr)_auto] gap-4 p-4 lg:h-svh lg:grid-cols-[1fr_22rem] lg:grid-rows-[auto_1fr]">
-            <Toolbar username={username} tables={tables} day={day} x={x} mode={mode} />
-            <Card className="min-h-80 overflow-hidden p-2">
-                <Chart tables={tables} x={x} />
+            <Toolbar
+                username={username}
+                tables={tables}
+                day={day}
+                x={x}
+                mode={mode}
+                options={options}
+            />
+            <Card className="min-h-80 gap-2 overflow-hidden p-2">
+                <Chart tables={tables} x={x} options={options} />
+                <Minimap tables={tables} />
             </Card>
             <Card
                 role="region"
@@ -80,14 +97,17 @@ function Toolbar({
     day,
     x,
     mode,
+    options,
 }: {
     username: string;
     tables: StandingsTables;
     day: number;
     x: number;
     mode: ClimbersMode;
+    options: ChartOptions;
 }) {
     const { settings } = useServices();
+    const inScrobblesMode = options.yAxis !== "standing";
     const { seek } = useTimeline();
 
     return (
@@ -118,21 +138,111 @@ function Toolbar({
                     }}
                 />
             </div>
-            <div className="flex items-center gap-2">
-                <Label htmlFor="climbers-mode">Climbers</Label>
-                <NativeSelect
-                    id="climbers-mode"
-                    value={mode}
-                    onChange={(e) => settings.update({ climbers: e.target.value as ClimbersMode })}
-                >
-                    <NativeSelectOption value="fold">fold long tail</NativeSelectOption>
-                    <NativeSelectOption value="within">
-                        within Top {climbersCut(x)}
-                    </NativeSelectOption>
-                    <NativeSelectOption value="all">all (raw)</NativeSelectOption>
-                </NativeSelect>
-            </div>
+            <OptionSelect
+                id="climbers-mode"
+                label="Climbers"
+                value={mode}
+                choices={[
+                    ["fold", "fold long tail"],
+                    ["within", `within Top ${climbersCut(x)}`],
+                    ["all", "all (raw)"],
+                ]}
+                onChange={(choice) => settings.update({ climbers: choice })}
+            />
+            <OptionSelect
+                id="y-axis"
+                label="Y axis"
+                value={options.yAxis}
+                choices={Y_AXIS_CHOICES}
+                onChange={(yAxis) => settings.update({ yAxis })}
+            />
+            <OptionSelect
+                id="below-top-x"
+                label="Below the Top X"
+                value={options.belowTopX}
+                choices={BELOW_TOP_X_CHOICES}
+                disabled={inScrobblesMode}
+                onChange={(belowTopX) => settings.update({ belowTopX })}
+            />
+            <OptionSelect
+                id="line-shape"
+                label="Line shape"
+                value={options.lineShape}
+                choices={LINE_SHAPE_CHOICES}
+                disabled={inScrobblesMode}
+                onChange={(lineShape) => settings.update({ lineShape })}
+            />
+            <OptionSelect
+                id="lines-drawn"
+                label="Lines drawn"
+                value={options.linesDrawn}
+                choices={LINES_DRAWN_CHOICES}
+                onChange={(linesDrawn) => settings.update({ linesDrawn })}
+            />
         </header>
+    );
+}
+
+/** Each choice of a setting, as its stored value and its label. */
+type Choices<T extends string> = readonly (readonly [value: T, label: string])[];
+
+const Y_AXIS_CHOICES: Choices<ChartOptions["yAxis"]> = [
+    ["standing", "Standing"],
+    ["scrobbles", "Scrobbles"],
+];
+const BELOW_TOP_X_CHOICES: Choices<ChartOptions["belowTopX"]> = [
+    ["gutter", "gutter"],
+    ["slide-off", "slide off"],
+    ["log", "log axis"],
+];
+const LINE_SHAPE_CHOICES: Choices<ChartOptions["lineShape"]> = [
+    ["s-curves", "S-curves"],
+    ["straight", "straight"],
+    ["monotone", "monotone"],
+    ["catmull-rom", "Catmull-Rom"],
+    ["basis", "smoothed (basis)"],
+];
+const LINES_DRAWN_CHOICES: Choices<ChartOptions["linesDrawn"]> = [
+    ["warm-up", "30-Day warm-up"],
+    ["no-warm-up", "no warm-up"],
+    ["seven-days", "at least 7 Days in Top X"],
+];
+
+/** A labelled select over a setting's choices, handing back only a value it offered. */
+function OptionSelect<T extends string>({
+    id,
+    label,
+    value,
+    choices,
+    disabled,
+    onChange,
+}: {
+    id: string;
+    label: string;
+    value: T;
+    choices: Choices<T>;
+    disabled?: boolean;
+    onChange: (value: T) => void;
+}) {
+    return (
+        <div className="flex items-center gap-2">
+            <Label htmlFor={id}>{label}</Label>
+            <NativeSelect
+                id={id}
+                value={value}
+                disabled={disabled}
+                onChange={(e) => {
+                    const chosen = choices.find(([choice]) => choice === e.target.value);
+                    if (chosen) onChange(chosen[0]);
+                }}
+            >
+                {choices.map(([choice, text]) => (
+                    <NativeSelectOption key={choice} value={choice}>
+                        {text}
+                    </NativeSelectOption>
+                ))}
+            </NativeSelect>
+        </div>
     );
 }
 

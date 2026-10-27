@@ -1,4 +1,4 @@
-import type { ClimbersMode } from "../db";
+import type { ClimbersMode, LinesRule, YAxis } from "../db";
 
 /** The Standing stored for an Artist who has no Scrobbles yet on a Day. */
 export const UNRANKED = 0xffff;
@@ -246,8 +246,7 @@ export function climbers(
     };
 }
 
-/** Which Artists the chart draws lines for, besides the Pinned Artists. */
-export type LinesRule = "warm-up";
+export type { LinesRule, YAxis };
 
 /** A span of fractional Days. */
 export interface DayWindow {
@@ -257,14 +256,18 @@ export interface DayWindow {
 
 /** The Days at the start of the history that the "warm-up" rule ignores. */
 const WARM_UP_DAYS = 30;
+/** The Days in the Top X within the window that the "seven-days" rule asks of an Artist. */
+const SEVEN_DAYS = 7;
 
 // The last drawn lines for each tables object, keyed on everything that decides them.
 const drawnLinesMemo = new WeakMap<StandingsTables, { key: string; lines: readonly number[] }>();
 
 /**
- * The ids of the Artists the chart draws a line for over `window`, in ascending order: every
- * Artist in the Top X on a visible Day after the warm-up, plus the Pinned Artists. A window that
- * lies wholly inside the warm-up draws its own Top X, so a young history isn't left blank.
+ * The ids of the Artists the chart draws a line for over `window`, in ascending order, plus the
+ * Pinned Artists. By `rule`: every Artist in the Top X on a visible Day after the 30-Day warm-up
+ * ("warm-up"; a window wholly inside it draws its own Top X, so a young history isn't left blank),
+ * the same from the first Day ("no-warm-up"), or every Artist in the Top X on at least 7 visible
+ * Days ("seven-days"; a shorter window asks for all of them).
  * Memoised on the integer window bounds, `x`, `rule`, `pinned` and `tables`.
  */
 export function drawnLines(
@@ -279,37 +282,52 @@ export function drawnLines(
     const key = [first, last, x, rule, pinned.toSorted((a, b) => a - b).join()].join("|");
     const memo = drawnLinesMemo.get(tables);
     if (memo?.key === key) return memo.lines;
-    const lines = linesOver(
-        tables,
-        last >= WARM_UP_DAYS ? Math.max(first, WARM_UP_DAYS) : first,
-        last,
-        x,
-        pinned,
-    );
+    const lines = linesOver(tables, linesSpan(rule, first, last), x, pinned);
     drawnLinesMemo.set(tables, { key, lines });
     return lines;
 }
 
-/** The Top X of every Day from `first` through `last`, plus `pinned`, in ascending order. */
+interface LinesSpan {
+    first: number;
+    last: number;
+    /** How many of those Days an Artist must be in the Top X on to get a line. */
+    days: number;
+}
+
+const linesSpan = (rule: LinesRule, first: number, last: number): LinesSpan => {
+    switch (rule) {
+        case "warm-up":
+            return {
+                first: last >= WARM_UP_DAYS ? Math.max(first, WARM_UP_DAYS) : first,
+                last,
+                days: 1,
+            };
+        case "no-warm-up":
+            return { first, last, days: 1 };
+        case "seven-days":
+            return { first, last, days: Math.min(SEVEN_DAYS, last - first + 1) };
+    }
+};
+
+/** Every Artist in the Top X on at least `days` of the Days `first` through `last`, plus `pinned`. */
 function linesOver(
     tables: StandingsTables,
-    first: number,
-    last: number,
+    { first, last, days }: LinesSpan,
     x: number,
     pinned: readonly number[],
 ): readonly number[] {
     const artistCount = tables.artists.length;
-    const drawn = new Set<number>(pinned);
+    const daysIn = new Map<number, number>();
     for (let day = first; day <= last; day++)
         for (let rank = 0; rank < Math.min(x, artistCount); rank++) {
             const id = tables.rankOrder[day * artistCount + rank]!;
             if (id === UNRANKED) break;
-            drawn.add(id);
+            daysIn.set(id, (daysIn.get(id) ?? 0) + 1);
         }
+    const drawn = new Set<number>(pinned);
+    for (const [id, count] of daysIn) if (count >= days) drawn.add(id);
     return [...drawn].toSorted((a, b) => a - b);
 }
-
-export type YAxis = "standing" | "scrobbles";
 
 /** An Artist's Standing (undefined while unranked) or cumulative Scrobbles at the end of `day`. */
 export function valueAt(

@@ -30,6 +30,10 @@ The X artists with the best Standings on a given Day, where X is a chart setting
 An artist's Scrobble count within a single Day, not cumulative.
 _Avoid_: Day count, daily scrobbles
 
+**Daily volume**:
+A Day's Scrobble count across all Artists, as the minimap under the chart draws it.
+_Avoid_: Daily total, activity
+
 **Climber**:
 Any Artist, in or out of the Top X, whose Standing improved since the previous Day, ranked by positions gained. An Artist debuting that Day counts as climbing from just below the last ranked Artist of the previous Day.
 _Avoid_: Mover, riser
