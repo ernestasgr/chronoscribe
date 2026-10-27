@@ -7,6 +7,7 @@ The principles and patterns every change in this codebase follows. A ticket's ac
 - A Vite single-page app with React 19 and strict TypeScript. It runs entirely in the browser, with no server or proxy; the browser calls last.fm directly.
 - Dexie (IndexedDB) for storage. Nothing goes in `localStorage`.
 - Zustand for app state, TanStack Virtual for long lists. TanStack Query is not used, because there is no server state to cache.
+- Zod for parsing data that crosses a boundary.
 - Heavy computation runs in a Web Worker over Comlink, passing typed arrays back zero-copy.
 - The chart draws on Canvas 2D using D3 modules (`d3-scale`, `d3-shape`, `d3-zoom`, `d3-array`). React renders its axes, labels and markers.
 - Tailwind and shadcn/ui for the interface.
@@ -18,6 +19,12 @@ The principles and patterns every change in this codebase follows. A ticket's ac
 - Dependencies point downward, lowest first: `events`, `ui`, `lastfm`, `db`, `ingest`, `standings`, `timeline`, `chart`, `app`. Adding a module means placing it in this order.
 - Each module owns its concern: `db` is the only code that touches IndexedDB (apart from the worker's read), and `standings` (plus the chart's line loop) is the only code that reads the raw table arrays.
 - `src/architecture.test.ts` enforces all of the above. Extend it whenever a new rule of this kind appears.
+
+## Source of truth and projections
+
+- Scrobbles are an append-only event log and the only source of truth for listening history.
+- Everything computed from them (the Standings tables, Climbers, anything the chart draws) is a projection: rebuilt from the log on demand, never stored or edited by hand.
+- Store only what cannot be derived: Scrobbles, Listener settings, Pinned Artists and app settings.
 
 ## Functional core, imperative shell
 
@@ -38,6 +45,7 @@ The principles and patterns every change in this codebase follows. A ticket's ac
 
 - Each service keeps its state in a vanilla Zustand store created inside its factory. State is data; actions are functions on the service.
 - State changes are pure reducers, `(state, input) => Partial<State>`, which the service applies with `setState`.
+- A lifecycle (a Job, the screen flow, the player) is an explicit state machine: a discriminated union of states and a pure `transition(state, event) => state` that lists every legal move; an event a state does not accept leaves it unchanged. Test the transition function directly. Plain reducers are enough; reach for XState v5 only if a chart of states gets deeply nested.
 - Keep the store minimal and derive everything else. For example, the Focus Day is derived from the playhead rather than stored.
 - Components subscribe through narrow selector hooks and change state only by calling service actions.
 - Persistent state hydrates from Dexie at boot and writes back on every change.
@@ -52,6 +60,7 @@ The principles and patterns every change in this codebase follows. A ticket's ac
 
 - Expected failures are values: discriminated unions such as `{ ok: true, value } | { ok: false, error }`, so callers must handle them and the types show them.
 - `throw` is reserved for programmer errors and broken invariants.
+- Parse, don't validate: data crossing a boundary (last.fm responses, Dexie rows, worker messages, user input) goes through a Zod schema with `safeParse`, which yields a typed value or a failure value. Never cast it with `as`. A malformed last.fm page is a `Hard` failure, never a stored `NaN`.
 - Long-running work accepts an `AbortSignal` and passes it down to `fetch`; cancelling is an outcome (`cancelled`), not a failure.
 - A job's promise resolves to its outcome and never rejects.
 
@@ -76,6 +85,11 @@ The principles and patterns every change in this codebase follows. A ticket's ac
   3. **The pure core (Vitest):** plain function tests, plus benchmarks that guard the performance budgets.
 - Tests never call the real last.fm API.
 - Write tests first (red, green, refactor) where the behaviour is new.
+
+## Types
+
+- Give identifiers and units that share a primitive their own branded type, for example `type DayIndex = number & { readonly brand: "DayIndex" }`. This covers Day index versus epoch day, Artist id, Standing, Unix seconds versus milliseconds, and Listener id. Values get their brand in one constructor per type, at the point they are created or parsed.
+- Prefer discriminated unions over optional fields and boolean flags, so impossible states cannot be written down.
 
 ## Code style
 
