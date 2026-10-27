@@ -1,4 +1,5 @@
 {
-  "$schema": "./node_modules/oxfmt/configuration_schema.json",
-  "ignorePatterns": [".scratch", ".claude", "dist", "e2e/fixtures/*.json", "docs", "*.md"]
+    "$schema": "./node_modules/oxfmt/configuration_schema.json",
+    "tabWidth": 4,
+    "ignorePatterns": [".scratch", ".claude", "dist", "e2e/fixtures/*.json", "docs", "*.md"]
 }
