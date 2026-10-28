@@ -16,6 +16,8 @@ export interface FixtureUser {
     history: FixtureScrobble[];
     /** A track the user is playing right now, served on top of page 1. */
     nowPlaying?: Omit<FixtureScrobble, "uts">;
+    /** Whether the user hides their recent listening, so last.fm refuses it with error 17. */
+    hidden?: boolean;
 }
 
 export interface FixtureResponse {
@@ -62,6 +64,11 @@ export function respondRecentTracks(
         (candidate) => candidate.username.toLowerCase() === params.get("user")?.toLowerCase(),
     );
     if (!user) return { status: 404, body: { error: 6, message: "User not found" } };
+    if (user.hidden)
+        return {
+            status: 403,
+            body: { error: 17, message: "Login: User required to be logged in" },
+        };
 
     const limit = Math.min(Number(params.get("limit") ?? 50), 1000);
     const page = Number(params.get("page") ?? 1);

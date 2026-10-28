@@ -199,3 +199,71 @@ describe("the Import job", () => {
         await expect.poll(() => stored).toEqual([2100]);
     });
 });
+
+describe("the probe", () => {
+    const bristol: FixtureUser = {
+        username: "Bristol",
+        history: scrobbles("Massive Attack", 1200, "2026-07-01T08:00:00Z"),
+    };
+    const hidden: FixtureUser = { username: "Hidden", history: [], hidden: true };
+
+    function setUp() {
+        const fake = fakeTransport([bristol, hidden]);
+        const db = openDb(`probe-${crypto.randomUUID()}`);
+        const events = createEventBus<IngestEvents>();
+        return { ...fake, db, ingest: createIngest({ db, events, transport: fake.transport }) };
+    }
+
+    test("checks a username and API key with one limit=1 request, storing nothing", async () => {
+        const { ingest, requests, db } = setUp();
+
+        expect(await ingest.probe("Bristol", API_KEY)).toEqual({ ok: true });
+        expect(requests.map(({ url }) => url.searchParams.get("limit"))).toEqual(["1"]);
+        expect(await db.listeners()).toEqual([]);
+        expect(ingest.store.getState().queue).toEqual([]);
+    });
+
+    test.each([
+        ["Nobody", API_KEY, "UnknownUser"],
+        ["Bristol", "wrong-key", "InvalidKey"],
+        ["Hidden", API_KEY, "PrivateHistory"],
+    ])("rejects %s with key %s as %s", async (username, apiKey, kind) => {
+        const { ingest } = setUp();
+
+        expect(await ingest.probe(username, apiKey)).toEqual({ ok: false, problem: { kind } });
+    });
+
+    test("a suspended API key (error 26) is an InvalidKey", async () => {
+        const fake = fakeTransport([bristol]);
+        const ingest = createIngest({
+            db: openDb(`probe-${crypto.randomUUID()}`),
+            events: createEventBus<IngestEvents>(),
+            transport: {
+                ...fake.transport,
+                fetch: async () =>
+                    new Response(JSON.stringify({ error: 26, message: "Suspended API key" }), {
+                        status: 403,
+                    }),
+            },
+        });
+
+        expect(await ingest.probe("Bristol", API_KEY)).toEqual({
+            ok: false,
+            problem: { kind: "InvalidKey" },
+        });
+    });
+
+    test("a request that can't reach last.fm is Unavailable", async () => {
+        const fake = fakeTransport([bristol]);
+        const ingest = createIngest({
+            db: openDb(`probe-${crypto.randomUUID()}`),
+            events: createEventBus<IngestEvents>(),
+            transport: { ...fake.transport, fetch: () => Promise.reject(new TypeError("offline")) },
+        });
+
+        expect(await ingest.probe("Bristol", API_KEY)).toMatchObject({
+            ok: false,
+            problem: { kind: "Unavailable" },
+        });
+    });
+});

@@ -32,7 +32,7 @@ export async function boot(root: HTMLElement): Promise<void> {
         timeline,
         settings,
         initial: mostRecentlyViewed(await db.listeners()),
-        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        defaultTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     });
 
     createRoot(root).render(

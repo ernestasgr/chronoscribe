@@ -57,6 +57,27 @@ export interface ImportRequest {
     timeZone: string;
 }
 
+/** Why the probe turned a username and API key down: no such user, a bad key, a private history, or no answer. */
+export type ProbeProblem =
+    | { kind: "UnknownUser" }
+    | { kind: "InvalidKey" }
+    | { kind: "PrivateHistory" }
+    | { kind: "Unavailable"; message: string };
+
+/** What the probe found: the username and key work together, or the problem with them. */
+export type ProbeResult = { ok: true } | { ok: false; problem: ProbeProblem };
+
+/** The last.fm error codes the probe can name: 6 no such user, 10 bad key, 17 private, 26 suspended key. */
+const PROBE_PROBLEMS: Readonly<Record<number, ProbeProblem>> = {
+    6: { kind: "UnknownUser" },
+    10: { kind: "InvalidKey" },
+    17: { kind: "PrivateHistory" },
+    26: { kind: "InvalidKey" },
+};
+
+const probeProblem = ({ code, message }: LastfmFailure): ProbeProblem =>
+    (code === undefined ? undefined : PROBE_PROBLEMS[code]) ?? { kind: "Unavailable", message };
+
 export const isSettled = ({ status }: Job): boolean =>
     status === "done" || status === "failed" || status === "cancelled";
 
@@ -199,7 +220,17 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
             .forEach((job) => controllers.get(job.id)?.abort());
     }
 
-    return { store, enqueueImport, cancel };
+    /** Checks a username and API key with one `limit=1` request, in turn with the queue's requests. */
+    async function probe(username: string, apiKey: string): Promise<ProbeResult> {
+        await throttle();
+        const result = await getRecentTracks(
+            { user: username, apiKey, page: 1, limit: 1 },
+            transport.fetch,
+        );
+        return result.ok ? { ok: true } : { ok: false, problem: probeProblem(result.error) };
+    }
+
+    return { store, enqueueImport, cancel, probe };
 }
 
 export type Ingest = ReturnType<typeof createIngest>;

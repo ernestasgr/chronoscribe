@@ -10,7 +10,8 @@ test("imports a Listener and shows the Top X for a chosen Day", async ({ page })
     const lastfmRequests = await serveLastfm(page, [bristol]);
 
     await importListener(page, "Bristol");
-    expect(lastfmRequests.map((url) => url.searchParams.get("page"))).toEqual(["1", "2"]);
+    const pages = lastfmRequests.filter((url) => url.searchParams.get("limit") === "1000");
+    expect(pages.map((url) => url.searchParams.get("page"))).toEqual(["1", "2"]);
 
     await focusOnBristol(page, "2026-07-03");
     await expect

@@ -12,18 +12,27 @@ import {
     Progress,
 } from "../ui";
 import { Dashboard } from "./Dashboard";
+import {
+    describedBy,
+    FieldProblem,
+    fieldOf,
+    TimeZoneSelect,
+    type FieldProblemOf,
+    type ProblemField,
+} from "./fields";
 import { useQueue, useServices, useSession, useSettings } from "./services";
+import type { SetupStatus } from "./session";
 
 export function App() {
     const screen = useSession((state) => state.screen);
 
     switch (screen.kind) {
         case "setup":
-            return <Setup error={screen.error} />;
+            return <Setup status={screen.status} />;
         case "importing":
             return <Importing listenerId={screen.listenerId} username={screen.username} />;
         case "dashboard":
-            return <Dashboard username={screen.listener.username} />;
+            return <Dashboard listener={screen.listener} />;
     }
 }
 
@@ -36,16 +45,23 @@ function Centered({ children }: { children: ReactNode }) {
     );
 }
 
-function Setup({ error }: { error?: string }) {
+function Setup({ status }: { status: SetupStatus }) {
     const { session } = useServices();
     const storedKey = useSettings((settings) => settings.apiKey);
     const [username, setUsername] = useState("");
     const [apiKey, setApiKey] = useState(storedKey);
+    const [timeZone, setTimeZone] = useState(session.defaultTimeZone);
 
     function submit(event: FormEvent) {
         event.preventDefault();
-        session.addListener(username.trim(), apiKey.trim());
+        void session.addListener({ username: username.trim(), apiKey: apiKey.trim(), timeZone });
     }
+
+    /** The problem to show under `field`, if the last attempt was turned down there. */
+    const problemUnder = (field: ProblemField): FieldProblemOf | undefined =>
+        status.kind === "rejected" && fieldOf(status.problem) === field
+            ? { id: `${field}-problem`, problem: status.problem, username: status.username }
+            : undefined;
 
     return (
         <Centered>
@@ -68,7 +84,9 @@ function Setup({ error }: { error?: string }) {
                             onChange={(e) => setUsername(e.target.value)}
                             autoComplete="off"
                             required
+                            {...describedBy(problemUnder("username"))}
                         />
+                        <FieldProblem shown={problemUnder("username")} />
                     </div>
                     <div className="grid gap-2">
                         <Label htmlFor="api-key">API key</Label>
@@ -78,14 +96,18 @@ function Setup({ error }: { error?: string }) {
                             onChange={(e) => setApiKey(e.target.value)}
                             autoComplete="off"
                             required
+                            {...describedBy(problemUnder("apiKey"))}
                         />
+                        <FieldProblem shown={problemUnder("apiKey")} />
                     </div>
-                    {error && (
-                        <p role="alert" className="text-sm text-destructive">
-                            {error}
-                        </p>
-                    )}
-                    <Button type="submit">Import</Button>
+                    <div className="grid gap-2">
+                        <Label htmlFor="time-zone">Timezone</Label>
+                        <TimeZoneSelect id="time-zone" value={timeZone} onChange={setTimeZone} />
+                    </div>
+                    <FieldProblem shown={problemUnder("form")} />
+                    <Button type="submit" disabled={status.kind === "checking"}>
+                        {status.kind === "checking" ? "Checking…" : "Import"}
+                    </Button>
                 </form>
             </CardContent>
         </Centered>
