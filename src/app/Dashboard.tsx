@@ -1,9 +1,9 @@
-import { ChevronLeftIcon, ChevronRightIcon, PauseIcon, PlayIcon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { ChevronLeftIcon, ChevronRightIcon, PauseIcon, PlayIcon, SettingsIcon } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { z } from "zod";
 import { useShallow } from "zustand/react/shallow";
 import { Chart, Minimap, type ChartOptions } from "../chart";
-import { SECONDS_PER_DAY, SecondsPerDay, STEP_DAYS, StepDays } from "../db";
+import { SECONDS_PER_DAY, SecondsPerDay, STEP_DAYS, StepDays, type ListenerRow } from "../db";
 import {
     climbers,
     climbersCut,
@@ -31,8 +31,9 @@ import {
     Slider,
     Switch,
 } from "../ui";
+import { describedBy, FieldProblem, TimeZoneSelect, type FieldProblemOf } from "./fields";
 import { useFlip } from "./flip";
-import { useServices, useSettings } from "./services";
+import { useServices, useSession, useSettings } from "./services";
 
 const count = (n: number, noun: string) => `${n.toLocaleString("en")} ${noun}${n === 1 ? "" : "s"}`;
 
@@ -74,7 +75,8 @@ function usePlayerKeys(timeline: Timeline) {
 }
 
 /** The Dashboard: the toolbar, the chart, and the Focus Day sidebar. */
-export function Dashboard({ username }: { username: string }) {
+export function Dashboard({ listener }: { listener: ListenerRow }) {
+    const { username } = listener;
     const tables = useTables();
     const x = useSettings((settings) => settings.x);
     const mode = useSettings((settings) => settings.climbers);
@@ -102,7 +104,7 @@ export function Dashboard({ username }: { username: string }) {
     return (
         <main className="grid min-h-svh grid-rows-[auto_minmax(20rem,1fr)_auto] gap-4 p-4 lg:h-svh lg:grid-cols-[1fr_22rem] lg:grid-rows-[auto_1fr]">
             <Toolbar
-                username={username}
+                listener={listener}
                 tables={tables}
                 day={day}
                 x={x}
@@ -134,14 +136,14 @@ export function Dashboard({ username }: { username: string }) {
 }
 
 function Toolbar({
-    username,
+    listener,
     tables,
     day,
     x,
     mode,
     options,
 }: {
-    username: string;
+    listener: ListenerRow;
     tables: StandingsTables;
     day: number;
     x: number;
@@ -154,7 +156,7 @@ function Toolbar({
 
     return (
         <header className="flex flex-wrap items-center gap-x-6 gap-y-3 lg:col-span-2">
-            <h1 className="text-xl font-semibold tracking-tight">{username}</h1>
+            <h1 className="text-xl font-semibold tracking-tight">{listener.username}</h1>
             <div className="flex min-w-48 flex-1 items-center gap-3">
                 <span className="text-sm font-medium whitespace-nowrap">Focus Day</span>
                 <Slider
@@ -232,7 +234,76 @@ function Toolbar({
                 />
                 <Label htmlFor="hide-future">Hide the future</Label>
             </div>
+            <Collapsible className="contents">
+                <CollapsibleTrigger asChild>
+                    <Button variant="outline" size="sm">
+                        <SettingsIcon />
+                        Settings
+                    </Button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="basis-full">
+                    <SettingsPanel listener={listener} />
+                </CollapsibleContent>
+            </Collapsible>
         </header>
+    );
+}
+
+/** The API key, probed before it is saved, and the Listener's timezone. */
+function SettingsPanel({ listener }: { listener: ListenerRow }) {
+    const { session } = useServices();
+    const storedKey = useSettings((settings) => settings.apiKey);
+    const check = useSession((state) => state.apiKeyCheck);
+    const [apiKey, setApiKey] = useState(storedKey);
+    // A check speaks only for the key it checked, so editing the key clears its message.
+    const checked = check.kind !== "idle" && check.apiKey === apiKey.trim() ? check : undefined;
+    const problem: FieldProblemOf | undefined =
+        checked?.kind === "rejected"
+            ? {
+                  id: "settings-api-key-problem",
+                  problem: checked.problem,
+                  username: listener.username,
+              }
+            : undefined;
+
+    function saveKey(event: FormEvent) {
+        event.preventDefault();
+        void session.changeApiKey(apiKey.trim());
+    }
+
+    return (
+        <Card className="flex-row flex-wrap items-start gap-x-6 gap-y-3 px-4 py-4">
+            <form onSubmit={saveKey} className="grid min-w-64 flex-1 gap-2">
+                <Label htmlFor="settings-api-key">API key</Label>
+                <div className="flex gap-2">
+                    <Input
+                        id="settings-api-key"
+                        value={apiKey}
+                        onChange={(e) => setApiKey(e.target.value)}
+                        autoComplete="off"
+                        required
+                        {...describedBy(problem)}
+                    />
+                    <Button type="submit" variant="secondary" disabled={check.kind === "checking"}>
+                        {check.kind === "checking" ? "Checking…" : "Save key"}
+                    </Button>
+                </div>
+                <FieldProblem shown={problem} />
+                {checked?.kind === "saved" && (
+                    <p role="status" className="text-sm text-muted-foreground">
+                        API key saved
+                    </p>
+                )}
+            </form>
+            <div className="grid gap-2">
+                <Label htmlFor="settings-time-zone">Timezone</Label>
+                <TimeZoneSelect
+                    id="settings-time-zone"
+                    value={listener.timeZone}
+                    onChange={(timeZone) => void session.changeTimeZone(timeZone)}
+                />
+            </div>
+        </Card>
     );
 }
 
