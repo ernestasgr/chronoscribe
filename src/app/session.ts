@@ -1,5 +1,5 @@
 import { createStore, type StoreApi } from "zustand";
-import { listenerId, type Db, type ListenerRow } from "../db";
+import { listenerId, mostRecentlyViewed, type Db, type ListenerId, type ListenerRow } from "../db";
 import type { Subscriber } from "../events";
 import type {
     ImportRequest,
@@ -33,7 +33,7 @@ export type ApiKeyCheck =
 
 export type Screen =
     | { kind: "setup"; status: SetupStatus }
-    | { kind: "importing"; listenerId: string; username: string }
+    | { kind: "importing"; listenerId: ListenerId; username: string }
     | { kind: "dashboard"; listener: ListenerRow };
 
 export interface SessionState {
@@ -56,7 +56,10 @@ const setupScreen = (status: SetupStatus): Screen => ({ kind: "setup", status })
 const unfinished = (job: Job): SetupProblem =>
     job.status === "cancelled"
         ? { kind: "ImportCancelled" }
-        : { kind: "ImportFailed", message: job.error?.message ?? "Import failed" };
+        : {
+              kind: "ImportFailed",
+              message: job.status === "failed" ? job.error.message : "Import failed",
+          };
 
 /**
  * Whether a probe problem keeps a new key from being saved. A missing or private Listener still
@@ -64,6 +67,23 @@ const unfinished = (job: Job): SetupProblem =>
  */
 const refusesKey = ({ kind }: ProbeProblem): boolean =>
     kind === "InvalidKey" || kind === "Unavailable";
+
+/** Listeners whose import never finished, most recently viewed first. */
+const unfinishedImports = (listeners: readonly ListenerRow[]): ListenerRow[] =>
+    listeners
+        .filter((listener) => !listener.importComplete)
+        .toSorted((a, b) => b.lastViewedAt - a.lastViewedAt);
+
+/** The dashboard of a finished Listener, else the import of an unfinished one, else setup. */
+const openingScreen = (
+    finished: ListenerRow | undefined,
+    resumable: ListenerRow | undefined,
+): Screen => {
+    if (finished) return { kind: "dashboard", listener: finished };
+    return resumable
+        ? { kind: "importing", listenerId: resumable.id, username: resumable.username }
+        : setupScreen({ kind: "editing" });
+};
 
 const screenAfter = (screen: Screen, event: SessionEvent): Screen => {
     switch (event.type) {
@@ -87,6 +107,8 @@ const screenAfter = (screen: Screen, event: SessionEvent): Screen => {
         case "jobSettled": {
             const { job, listener } = event;
             if (screen.kind !== "importing" || screen.listenerId !== job.listenerId) return screen;
+            // A paused import stays behind its screen, which offers to resume it.
+            if (job.status === "paused") return screen;
             return job.status === "done" && listener
                 ? { kind: "dashboard", listener }
                 : setupScreen({
@@ -134,8 +156,8 @@ export interface SessionDeps {
     ingest: Ingest;
     timeline: Timeline;
     settings: Settings;
-    /** The Listener to open on, if any has finished importing. */
-    initial: ListenerRow | undefined;
+    /** Every stored Listener: the app opens on the most recently viewed, resuming unfinished imports. */
+    listeners: readonly ListenerRow[];
     /** The browser's timezone, offered for new Listeners. */
     defaultTimeZone: string;
 }
@@ -147,13 +169,13 @@ export function createSession({
     ingest,
     timeline,
     settings,
-    initial,
+    listeners,
     defaultTimeZone,
 }: SessionDeps) {
+    const initial = mostRecentlyViewed(listeners);
+    const resumable = unfinishedImports(listeners);
     const store: StoreApi<SessionState> = createStore<SessionState>(() => ({
-        screen: initial
-            ? { kind: "dashboard", listener: initial }
-            : setupScreen({ kind: "editing" }),
+        screen: openingScreen(initial, resumable[0]),
         apiKeyCheck: { kind: "idle" },
     }));
 
@@ -169,6 +191,29 @@ export function createSession({
         return screen.kind === "dashboard" ? screen.listener : undefined;
     };
 
+    /** The username Settings checks a new API key against: the dashboard's or the import's. */
+    const currentUsername = (): string | undefined => {
+        const { screen } = store.getState();
+        if (screen.kind === "dashboard") return screen.listener.username;
+        return screen.kind === "importing" ? screen.username : undefined;
+    };
+
+    /** Picks an unfinished import back up with the stored API key. */
+    const resume = (row: ListenerRow) =>
+        void ingest.enqueueImport({
+            username: row.username,
+            apiKey: settings.store.getState().apiKey,
+            timeZone: row.timeZone,
+        });
+
+    /** Resumes the import screen's import; one still queued or running is joined, not restarted. */
+    async function resumeImport(): Promise<void> {
+        const { screen } = store.getState();
+        if (screen.kind !== "importing") return;
+        const row = await db.listener(screen.listenerId);
+        if (row && !row.importComplete) resume(row);
+    }
+
     /** Shows the dashboard's Listener on the timeline, if the dashboard is showing. */
     const showCurrent = () => {
         const listener = currentListener();
@@ -181,6 +226,7 @@ export function createSession({
     });
 
     if (initial) timeline.show(initial);
+    resumable.forEach(resume);
 
     return {
         store,
@@ -197,13 +243,17 @@ export function createSession({
             void ingest.enqueueImport({ username, apiKey, timeZone });
         },
 
-        /** Probes a new API key against the current Listener and saves it only if last.fm takes it. */
+        resumeImport,
+
+        /** Probes a new API key against the current Listener, saving it and resuming their import only if last.fm takes it. */
         async changeApiKey(apiKey: string): Promise<void> {
-            const listener = currentListener();
-            if (!listener || !dispatch({ type: "keySubmitted", apiKey })) return;
-            const result = await ingest.probe(listener.username, apiKey);
+            const username = currentUsername();
+            if (!username || !dispatch({ type: "keySubmitted", apiKey })) return;
+            const result = await ingest.probe(username, apiKey);
             dispatch({ type: "keyProbed", apiKey, result });
-            if (store.getState().apiKeyCheck.kind === "saved") settings.update({ apiKey });
+            if (store.getState().apiKeyCheck.kind !== "saved") return;
+            settings.update({ apiKey });
+            await resumeImport();
         },
 
         /** Moves the current Listener's Days to `timeZone`, rebuilding the tables from what is stored. */

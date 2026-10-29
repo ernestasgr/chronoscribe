@@ -1,7 +1,16 @@
 export const API_ROOT = "https://ws.audioscrobbler.com/2.0/";
 
+/** A moment as last.fm counts it: whole seconds since the Unix epoch. */
+export type UnixSeconds = number & { readonly brand: "UnixSeconds" };
+
+/** Brands a count of whole seconds since the Unix epoch. */
+export const unixSeconds = (seconds: number): UnixSeconds => seconds as UnixSeconds;
+
+/** The whole second a Unix time in milliseconds falls in. */
+export const unixSecondsAt = (ms: number): UnixSeconds => unixSeconds(Math.floor(ms / 1000));
+
 export interface LastfmScrobble {
-    uts: number;
+    uts: UnixSeconds;
     artist: string;
     track: string;
     album: string;
@@ -38,8 +47,8 @@ export interface RecentTracksRequest {
     apiKey: string;
     page: number;
     limit: number;
-    /** Exclusive upper bound, in Unix seconds. */
-    to?: number;
+    /** Exclusive upper bound. */
+    to?: UnixSeconds;
     signal?: AbortSignal;
 }
 
@@ -91,7 +100,7 @@ function parseRecentTracks(status: number, body: RawBody): LastfmResult<RecentTr
             scrobbles: tracks
                 .filter((t) => t.date?.uts !== undefined && t["@attr"]?.nowplaying !== "true")
                 .map((t) => ({
-                    uts: Number(t.date!.uts),
+                    uts: unixSeconds(Number(t.date!.uts)),
                     artist: t.artist["#text"],
                     track: t.name,
                     album: t.album["#text"],

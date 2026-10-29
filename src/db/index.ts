@@ -1,27 +1,47 @@
 import { Dexie, type EntityTable } from "dexie";
 import { z } from "zod";
+import { unixSeconds, type UnixSeconds } from "../lastfm";
+
+/** A Listener's key: their last.fm username, lowercased. */
+export type ListenerId = string & { readonly brand: "ListenerId" };
+
+/** The Listener id for a last.fm username, which last.fm matches case-insensitively. */
+export const listenerId = (username: string): ListenerId => username.toLowerCase() as ListenerId;
 
 export interface ScrobbleRow {
     id?: number;
-    listenerId: string;
-    uts: number;
+    listenerId: ListenerId;
+    uts: UnixSeconds;
     artist: string;
     track: string;
     album: string;
 }
 
-export interface ListenerRow {
-    /** The lowercased last.fm username. */
-    id: string;
-    username: string;
+/** The page sizes an import asks last.fm for, largest first. */
+export const PAGE_SIZES = [1000, 200] as const;
+export type PageSize = (typeof PAGE_SIZES)[number];
+
+/** A stored Listener row; one from before page sizes were remembered asks for 1000. */
+const ListenerRowSchema = z.object({
+    id: z.string().transform(listenerId),
+    username: z.string(),
     /** IANA timezone the Listener's Days are counted in. */
-    timeZone: string;
-    pinnedArtists: string[];
-    /** The fixed, exclusive `to` the import pages up to, in Unix seconds. */
-    importTo: number;
-    importComplete: boolean;
-    lastViewedAt: number;
-}
+    timeZone: z.string(),
+    pinnedArtists: z.array(z.string()),
+    /** The fixed, exclusive `to` the import pages up to. */
+    importTo: z.number().transform(unixSeconds),
+    importComplete: z.boolean(),
+    /** How many Scrobbles each import request asks for: 200 once last.fm has refused 1000. */
+    pageSize: z.literal(PAGE_SIZES).catch(PAGE_SIZES[0]),
+    lastViewedAt: z.number(),
+});
+
+export type ListenerRow = z.infer<typeof ListenerRowSchema>;
+
+const parseListener = (row: unknown): ListenerRow | undefined => {
+    const parsed = ListenerRowSchema.safeParse(row);
+    return parsed.success ? parsed.data : undefined;
+};
 
 /** fold long tail / within Top max(50, 5X) / all (raw) */
 export const CLIMBERS_MODES = ["fold", "within", "all"] as const;
@@ -115,10 +135,6 @@ function openDexie(name: string): ChronoscribeDexie {
     return dexie;
 }
 
-export function listenerId(username: string): string {
-    return username.toLowerCase();
-}
-
 /** The most recently viewed Listener whose import has finished. */
 export const mostRecentlyViewed = (listeners: readonly ListenerRow[]): ListenerRow | undefined =>
     listeners
@@ -128,7 +144,7 @@ export const mostRecentlyViewed = (listeners: readonly ListenerRow[]): ListenerR
 /** The app's storage. Every read and write of IndexedDB goes through here. */
 export function openDb(name = "chronoscribe") {
     const dexie = openDexie(name);
-    const scrobblesOf = (id: string) =>
+    const scrobblesOf = (id: ListenerId) =>
         dexie.scrobbles.where("[listenerId+uts]").between([id, Dexie.minKey], [id, Dexie.maxKey]);
 
     return {
@@ -141,33 +157,57 @@ export function openDb(name = "chronoscribe") {
             await dexie.appSettings.put({ ...settings, id: SETTINGS_ID });
         },
 
-        listener(id: string): Promise<ListenerRow | undefined> {
-            return dexie.listeners.get(id);
+        async listener(id: ListenerId): Promise<ListenerRow | undefined> {
+            return parseListener(await dexie.listeners.get(id));
         },
 
-        listeners(): Promise<ListenerRow[]> {
-            return dexie.listeners.toArray();
+        async listeners(): Promise<ListenerRow[]> {
+            return (await dexie.listeners.toArray()).flatMap((row) => parseListener(row) ?? []);
         },
 
         async putListener(listener: ListenerRow): Promise<void> {
             await dexie.listeners.put(listener);
         },
 
-        async updateListener(id: string, changes: Partial<Omit<ListenerRow, "id">>): Promise<void> {
+        async updateListener(
+            id: ListenerId,
+            changes: Partial<Omit<ListenerRow, "id">>,
+        ): Promise<void> {
             await dexie.listeners.update(id, changes);
         },
 
-        /** Stores one page of a Listener's Scrobbles in a single transaction. */
-        async addScrobbles(rows: Omit<ScrobbleRow, "id">[]): Promise<void> {
-            await dexie.transaction("rw", dexie.scrobbles, () => dexie.scrobbles.bulkAdd(rows));
+        /** Stores one page of a Listener's Scrobbles in one transaction, completing their import on the last. */
+        async addPage(
+            id: ListenerId,
+            rows: Omit<ScrobbleRow, "id">[],
+            { last }: { last: boolean },
+        ): Promise<void> {
+            await dexie.transaction("rw", dexie.scrobbles, dexie.listeners, async () => {
+                await dexie.scrobbles.bulkAdd(rows);
+                if (last) await dexie.listeners.update(id, { importComplete: true });
+            });
         },
 
-        async deleteScrobblesOf(id: string): Promise<void> {
+        async deleteScrobblesOf(id: ListenerId): Promise<void> {
             await scrobblesOf(id).delete();
         },
 
+        /** The second of a Listener's oldest stored Scrobble, if they have any. */
+        async oldestUtsOf(id: ListenerId): Promise<UnixSeconds | undefined> {
+            return (await scrobblesOf(id).first())?.uts;
+        },
+
+        /** Deletes a Listener's Scrobbles from exactly the second `uts`. */
+        async deleteScrobblesAt(id: ListenerId, uts: UnixSeconds): Promise<void> {
+            await dexie.scrobbles.where("[listenerId+uts]").equals([id, uts]).delete();
+        },
+
+        countScrobblesOf(id: ListenerId): Promise<number> {
+            return scrobblesOf(id).count();
+        },
+
         /** A Listener's Scrobbles, oldest first. */
-        async scrobblesOf(id: string): Promise<Omit<ScrobbleRow, "id">[]> {
+        async scrobblesOf(id: ListenerId): Promise<Omit<ScrobbleRow, "id">[]> {
             const rows = await scrobblesOf(id).toArray();
             return rows.map(({ id: _id, ...row }) => row);
         },

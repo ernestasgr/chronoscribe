@@ -1,5 +1,6 @@
-import { useMemo, type ReactNode } from "react";
-import { NativeSelect, NativeSelectOption } from "../ui";
+import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { Button, Input, Label, NativeSelect, NativeSelectOption } from "../ui";
+import { useServices, useSession, useSettings } from "./services";
 import type { SetupProblem } from "./session";
 
 const CREATE_API_KEY_URL = "https://www.last.fm/api/account/create";
@@ -58,6 +59,11 @@ const messageOf = <Kind extends SetupProblem["kind"]>(
     username: string,
 ): ReactNode => (PROBLEMS[problem.kind] as (typeof PROBLEMS)[Kind]).message(problem, username);
 
+/** What `problem` tells the user, inline. */
+export function ProblemMessage({ problem, username }: { problem: SetupProblem; username: string }) {
+    return <>{messageOf(problem, username)}</>;
+}
+
 /** A field's problem, for when a field shows one: the message, and the id that describes it. */
 export interface FieldProblemOf {
     id: string;
@@ -114,5 +120,49 @@ export function TimeZoneSelect({
                 </NativeSelectOption>
             ))}
         </NativeSelect>
+    );
+}
+
+/** The API key, probed against `username` before it is saved. */
+export function ApiKeyForm({ id, username }: { id: string; username: string }) {
+    const { session } = useServices();
+    const storedKey = useSettings((settings) => settings.apiKey);
+    const check = useSession((state) => state.apiKeyCheck);
+    const [apiKey, setApiKey] = useState(storedKey);
+    // A check speaks only for the key it checked, so editing the key clears its message.
+    const checked = check.kind !== "idle" && check.apiKey === apiKey.trim() ? check : undefined;
+    const problem: FieldProblemOf | undefined =
+        checked?.kind === "rejected"
+            ? { id: `${id}-problem`, problem: checked.problem, username }
+            : undefined;
+
+    function saveKey(event: FormEvent) {
+        event.preventDefault();
+        void session.changeApiKey(apiKey.trim());
+    }
+
+    return (
+        <form onSubmit={saveKey} className="grid min-w-64 flex-1 gap-2">
+            <Label htmlFor={id}>API key</Label>
+            <div className="flex gap-2">
+                <Input
+                    id={id}
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    autoComplete="off"
+                    required
+                    {...describedBy(problem)}
+                />
+                <Button type="submit" variant="secondary" disabled={check.kind === "checking"}>
+                    {check.kind === "checking" ? "Checking…" : "Save key"}
+                </Button>
+            </div>
+            <FieldProblem shown={problem} />
+            {checked?.kind === "saved" && (
+                <p role="status" className="text-sm text-muted-foreground">
+                    API key saved
+                </p>
+            )}
+        </form>
     );
 }

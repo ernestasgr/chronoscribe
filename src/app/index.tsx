@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { mostRecentlyViewed, openDb } from "../db";
+import { openDb } from "../db";
 import { createEventBus } from "../events";
 import { createIngest, type IngestEvents } from "../ingest";
 import { createTimeline, createWorkerBuild, TimelineContext } from "../timeline";
@@ -31,7 +31,7 @@ export async function boot(root: HTMLElement): Promise<void> {
         ingest,
         timeline,
         settings,
-        initial: mostRecentlyViewed(await db.listeners()),
+        listeners: await db.listeners(),
         defaultTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     });
 

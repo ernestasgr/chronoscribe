@@ -5,25 +5,55 @@ import {
     LASTFM_ORIGIN,
     scrobbles,
     respondRecentTracks,
+    type FixtureResponse,
     type FixtureUser,
 } from "../../test-support/lastfm";
-import { openDb, type Db } from "../db";
+import { listenerId, openDb, type Db } from "../db";
+import { unixSecondsAt } from "../lastfm";
 import { createEventBus } from "../events";
-import { createIngest, type IngestEvents, type JobStatus } from ".";
+import { createIngest, transition, type IngestEvents, type Job, type JobStatus } from ".";
 
 const API_KEY = "fixture-key";
 const NOW = Date.parse("2026-07-10T12:00:00Z");
+const BRISTOL = listenerId("Bristol");
+const TWINS = listenerId("Twins");
 
 const request = (username: string, apiKey = API_KEY) => ({ username, apiKey, timeZone: "UTC" });
 
-function fakeTransport(users: FixtureUser[]) {
+/** What a scripted request gets instead of the fixture's answer: a response, or no answer at all. */
+type Scripted = FixtureResponse | "offline" | undefined;
+
+/** A last.fm error body, as the real API sends it. */
+const lastfmError = (error: number, status = 500): FixtureResponse => ({
+    status,
+    body: { error, message: `last.fm error ${error}` },
+});
+
+/** The fixture's answer, as if last.fm had capped the page at `perPage`. */
+const cappedAt = (perPage: number, url: URL, users: FixtureUser[]): FixtureResponse => {
+    const capped = new URL(url);
+    capped.searchParams.set(
+        "limit",
+        String(Math.min(perPage, Number(url.searchParams.get("limit")))),
+    );
+    return respondRecentTracks(capped, users, API_KEY);
+};
+
+/** last.fm over `users` on a fake clock; `script` may answer any request, by index, instead. */
+function fakeTransport(
+    users: FixtureUser[],
+    script: (url: URL, index: number) => Scripted = () => undefined,
+) {
     let clock = NOW;
     const requests: { url: URL; at: number }[] = [];
+    const sleeps: number[] = [];
     return {
         requests,
+        sleeps,
         transport: {
             now: () => clock,
             sleep: async (ms: number) => {
+                sleeps.push(ms);
                 clock += ms;
             },
             fetch: async (input: string | URL | Request, init?: RequestInit) => {
@@ -31,7 +61,9 @@ function fakeTransport(users: FixtureUser[]) {
                 const url = new URL(String(input));
                 requests.push({ url, at: clock });
                 if (url.origin !== LASTFM_ORIGIN) throw new TypeError("unexpected host");
-                const { status, body } = respondRecentTracks(url, users, API_KEY);
+                const scripted = script(url, requests.length - 1);
+                if (scripted === "offline") throw new TypeError("Failed to fetch");
+                const { status, body } = scripted ?? respondRecentTracks(url, users, API_KEY);
                 clock += 40; // response latency
                 return new Response(JSON.stringify(body), {
                     status,
@@ -41,6 +73,18 @@ function fakeTransport(users: FixtureUser[]) {
         },
     };
 }
+
+/** Each stored Scrobble as one line, to compare a stored history with the fixture's. */
+const lines = (rows: readonly { uts: number; track: string }[]) =>
+    rows.map(({ uts, track }) => `${uts} ${track}`).toSorted();
+
+/** Each page request's page, limit and `to`. */
+const pageRequests = (requests: readonly { url: URL }[]) =>
+    requests.map(({ url }) => ({
+        page: url.searchParams.get("page"),
+        limit: url.searchParams.get("limit"),
+        to: url.searchParams.get("to"),
+    }));
 
 describe("the Import job", () => {
     let db: Db;
@@ -59,8 +103,11 @@ describe("the Import job", () => {
         history: scrobbles("Goldfrapp", 1500, "2026-07-02T08:00:00Z"),
     };
 
-    function setUp(users: FixtureUser[] = [bristol]) {
-        const fake = fakeTransport(users);
+    function setUp(
+        users: FixtureUser[] = [bristol],
+        script?: (url: URL, index: number) => Scripted,
+    ) {
+        const fake = fakeTransport(users, script);
         const events = createEventBus<IngestEvents>();
         return { ...fake, events, ingest: createIngest({ db, events, transport: fake.transport }) };
     }
@@ -74,17 +121,17 @@ describe("the Import job", () => {
         const job = await ingest.enqueueImport(request("Bristol"));
 
         expect(job).toMatchObject({ status: "done", progress: { fetched: 2100, total: 2100 } });
-        const stored = await db.scrobblesOf("bristol");
+        const stored = await db.scrobblesOf(BRISTOL);
         expect(stored).toHaveLength(2100);
         expect(stored.filter((s) => s.artist === "Tricky")).toEqual([]);
         expect(stored[0]).toEqual({
-            listenerId: "bristol",
+            listenerId: BRISTOL,
             uts: Date.parse("2026-07-01T08:00:00Z") / 1000,
             artist: "Massive Attack",
             track: "Massive Attack track 0",
             album: "Massive Attack album",
         });
-        expect(await db.listener("bristol")).toMatchObject({
+        expect(await db.listener(BRISTOL)).toMatchObject({
             username: "Bristol",
             timeZone: "UTC",
             importComplete: true,
@@ -119,7 +166,11 @@ describe("the Import job", () => {
         const seen: { status: JobStatus; fetched?: number; etaMs?: number }[] = [];
         const unsubscribe = ingest.store.subscribe(({ queue: [job] }) => {
             if (job)
-                seen.push({ status: job.status, fetched: job.progress?.fetched, etaMs: job.etaMs });
+                seen.push(
+                    job.progress.kind === "counted"
+                        ? { status: job.status, ...job.progress }
+                        : { status: job.status },
+                );
         });
         await ingest.enqueueImport(request("Bristol"));
         unsubscribe();
@@ -162,34 +213,220 @@ describe("the Import job", () => {
     test("cancelling a Listener aborts their running job and keeps it incomplete", async () => {
         const { ingest, requests } = setUp();
         const unsubscribe = ingest.store.subscribe(({ queue: [job] }) => {
-            if (job?.progress && job.status === "running") ingest.cancel("bristol");
+            if (job?.progress.kind === "counted" && job.status === "running")
+                ingest.cancel(BRISTOL);
         });
         const job = await ingest.enqueueImport(request("Bristol"));
         unsubscribe();
 
         expect(job.status).toBe("cancelled");
         expect(requests).toHaveLength(1);
-        expect(await db.listener("bristol")).toMatchObject({ importComplete: false });
+        expect(await db.listener(BRISTOL)).toMatchObject({ importComplete: false });
     });
 
-    test("a Hard last.fm error fails the job with that error and emits no change", async () => {
+    test("a Hard last.fm error pauses the job with that error and emits no change", async () => {
         const { ingest, events } = setUp();
         const changed: string[] = [];
-        events.on("scrobblesChanged", ({ listenerId }) => changed.push(listenerId));
+        events.on("scrobblesChanged", (changedEvent) => changed.push(changedEvent.listenerId));
 
         const job = await ingest.enqueueImport(request("Bristol", "wrong-key"));
 
-        expect(job).toMatchObject({ status: "failed", error: { kind: "Hard", code: 10 } });
+        expect(job).toMatchObject({ status: "paused", error: { kind: "Hard", code: 10 } });
         expect(changed).toEqual([]);
+    });
+
+    test.each([6, 10, 17])(
+        "a Hard error %i mid-run pauses at once, keeping the pages stored before it",
+        async (code) => {
+            const { ingest, requests, sleeps } = setUp([bristol], (_, index) =>
+                index === 1 ? lastfmError(code, 400) : undefined,
+            );
+
+            const job = await ingest.enqueueImport(request("Bristol"));
+
+            expect(job).toMatchObject({ status: "paused", error: { kind: "Hard", code } });
+            expect(requests).toHaveLength(2);
+            expect(sleeps.filter((ms) => ms >= 1000)).toEqual([]);
+            expect(await db.scrobblesOf(BRISTOL)).toHaveLength(1000);
+            expect(await db.listener(BRISTOL)).toMatchObject({ importComplete: false });
+        },
+    );
+
+    // Two Scrobbles share the second that page 1 ends on: one lands on page 1, its twin on page 2.
+    const twins: FixtureUser = (() => {
+        const history = scrobbles("Goldfrapp", 1499, "2026-07-02T08:00:00Z");
+        return { username: "Twins", history: [...history, { ...history[499]!, track: "Twin" }] };
+    })();
+
+    /** Runs `username`'s import until its first page is stored, then stops it, as a reload would. */
+    async function interruptAfterFirstPage(username: string) {
+        const { ingest } = setUp([twins, bristol]);
+        const unsubscribe = ingest.store.subscribe(({ queue: [job] }) => {
+            if (job?.progress.kind === "counted" && job.status === "running")
+                ingest.cancel(listenerId(username));
+        });
+        await ingest.enqueueImport(request(username));
+        unsubscribe();
+    }
+
+    test("resumes from the oldest stored second, with nothing dropped or duplicated", async () => {
+        await interruptAfterFirstPage("Twins");
+        const stored = await db.scrobblesOf(TWINS);
+        expect(stored).toHaveLength(1000);
+        const oldestUts = stored[0]!.uts;
+
+        const { ingest, requests } = setUp([twins]);
+        const job = await ingest.enqueueImport(request("Twins"));
+
+        expect(job).toMatchObject({ status: "done", progress: { fetched: 1500, total: 1500 } });
+        expect(requests.map(({ url }) => Object.fromEntries(url.searchParams))).toMatchObject([
+            { page: "1", to: String(oldestUts + 1) },
+        ]);
+        expect(lines(await db.scrobblesOf(TWINS))).toEqual(lines(twins.history));
+        expect(await db.listener(TWINS)).toMatchObject({
+            importTo: unixSecondsAt(NOW),
+            importComplete: true,
+        });
+    });
+
+    /** Each Import job state `ingest` publishes, as the status line would read it. */
+    function watch(ingest: ReturnType<typeof setUp>["ingest"]) {
+        const seen: Job[] = [];
+        const unsubscribe = ingest.store.subscribe(({ queue: [job] }) => {
+            if (job) seen.push(job);
+        });
+        return { seen, unsubscribe };
+    }
+
+    test("retries transient errors with exponential backoff, counting failures afresh after each success", async () => {
+        // Requests 1–4 and 6–9 fail, each run short of the 5 that would pause the import.
+        const answers: Scripted[] = ["offline", lastfmError(29), lastfmError(8), lastfmError(16)];
+        const { ingest, sleeps } = setUp([bristol], (_, index) =>
+            index >= 1 && index <= 4
+                ? answers[index - 1]
+                : index >= 6 && index <= 9
+                  ? lastfmError(11)
+                  : undefined,
+        );
+        const { seen, unsubscribe } = watch(ingest);
+
+        const job = await ingest.enqueueImport(request("Bristol"));
+        unsubscribe();
+
+        expect(job).toMatchObject({ status: "done", progress: { fetched: 2100, total: 2100 } });
+        // The first failure is at 1000, and switching to 200 makes a new request that counts afresh.
+        expect(sleeps.filter((ms) => ms >= 1000)).toEqual([
+            1000, 1000, 2000, 4000, 1000, 2000, 4000, 8000,
+        ]);
+        expect(seen.flatMap((s) => (s.status === "retrying" ? [s.retry] : []))).toContainEqual({
+            failures: 2,
+            pausesAt: 5,
+            inMs: 2000,
+            error: expect.objectContaining({ kind: "Transient", code: 8 }),
+        });
+        expect(seen.at(-1)?.status).toBe("done");
+        expect(lines(await db.scrobblesOf(BRISTOL))).toEqual(
+            lines(bristol.history.filter(({ artist }) => artist !== "Tricky")),
+        );
+    });
+
+    test("pauses after 5 transient failures in a row on one request, keeping every stored page", async () => {
+        const { ingest, events, requests } = setUp([bristol], (_, index) =>
+            index >= 1 && index <= 6 ? lastfmError(29) : undefined,
+        );
+        const changed: string[] = [];
+        events.on("scrobblesChanged", (changedEvent) => changed.push(changedEvent.listenerId));
+
+        const paused = await ingest.enqueueImport(request("Bristol"));
+
+        expect(paused).toMatchObject({
+            status: "paused",
+            error: { kind: "Transient", code: 29 },
+            progress: { fetched: 999, total: 2100 },
+        });
+        // One failure at 1000 switches to a new request of 200, which then fails 5 times in a row.
+        expect(
+            pageRequests(requests)
+                .slice(1)
+                .map(({ limit }) => limit),
+        ).toEqual(["1000", "200", "200", "200", "200", "200"]);
+        // Page 1 is kept, less its oldest second, which the switch to pages of 200 fetches again.
+        expect(await db.scrobblesOf(BRISTOL)).toHaveLength(999);
+        expect(await db.listener(BRISTOL)).toMatchObject({ importComplete: false });
+        expect(changed).toEqual([]);
+
+        const resumed = await ingest.enqueueImport(request("Bristol"));
+        expect(resumed).toMatchObject({ status: "done", progress: { fetched: 2100, total: 2100 } });
+        expect(lines(await db.scrobblesOf(BRISTOL))).toEqual(
+            lines(bristol.history.filter(({ artist }) => artist !== "Tricky")),
+        );
+        expect(changed).toEqual(["bristol"]);
+    });
+
+    test("switches to pages of 200 for the rest of the run once last.fm caps perPage below 1000", async () => {
+        const { ingest, requests } = setUp([bristol], (url, index) =>
+            index >= 1 ? cappedAt(200, url, [bristol]) : undefined,
+        );
+
+        const job = await ingest.enqueueImport(request("Bristol"));
+
+        expect(job).toMatchObject({ status: "done", progress: { fetched: 2100, total: 2100 } });
+        const [first, capped, ...rest] = pageRequests(requests);
+        expect(first).toMatchObject({ page: "1", limit: "1000" });
+        expect(capped).toMatchObject({ page: "2", limit: "1000" });
+        const oldestOfFirstPage = Date.parse("2026-07-01T08:00:00Z") / 1000 + 1100 * 60;
+        expect(rest[0]).toEqual({ page: "1", limit: "200", to: String(oldestOfFirstPage + 1) });
+        expect(rest.every(({ limit }) => limit === "200")).toBe(true);
+        expect(lines(await db.scrobblesOf(BRISTOL))).toEqual(
+            lines(bristol.history.filter(({ artist }) => artist !== "Tricky")),
+        );
+        expect(await db.listener(BRISTOL)).toMatchObject({ pageSize: 200 });
+    });
+
+    test("switches to pages of 200 when a page of 1000 fails, and remembers it for the Listener", async () => {
+        const { ingest, requests } = setUp([bristol], (_, index) =>
+            index === 1 ? lastfmError(8) : undefined,
+        );
+
+        const job = await ingest.enqueueImport(request("Bristol"));
+
+        expect(job).toMatchObject({ status: "done", progress: { fetched: 2100, total: 2100 } });
+        expect(pageRequests(requests).slice(1, 3)).toMatchObject([
+            { page: "2", limit: "1000" },
+            { page: "1", limit: "200" },
+        ]);
+        expect(lines(await db.scrobblesOf(BRISTOL))).toEqual(
+            lines(bristol.history.filter(({ artist }) => artist !== "Tricky")),
+        );
+
+        const again = setUp();
+        await again.ingest.enqueueImport(request("Bristol"));
+        expect(pageRequests(again.requests)[0]).toMatchObject({ page: "1", limit: "200" });
+    });
+
+    test("queuing a Listener whose import hasn't settled joins that import", async () => {
+        await interruptAfterFirstPage("Bristol");
+        const { ingest, requests } = setUp();
+
+        const [first, second] = await Promise.all([
+            ingest.enqueueImport(request("Bristol")),
+            ingest.enqueueImport(request("Bristol")),
+        ]);
+
+        expect(second).toBe(first);
+        expect(first.status).toBe("done");
+        expect(ingest.store.getState().queue).toHaveLength(1);
+        expect(requests).toHaveLength(2);
+        expect(await db.scrobblesOf(BRISTOL)).toHaveLength(2100);
     });
 
     test("emits scrobblesChanged once the Scrobbles are stored, then jobSettled", async () => {
         const { ingest, events } = setUp();
         const seen: string[] = [];
         const stored: number[] = [];
-        events.on("scrobblesChanged", ({ listenerId }) => {
-            seen.push(`changed ${listenerId}`);
-            void db.scrobblesOf(listenerId).then((rows) => stored.push(rows.length));
+        events.on("scrobblesChanged", ({ listenerId: changed }) => {
+            seen.push(`changed ${changed}`);
+            void db.scrobblesOf(changed).then((rows) => stored.push(rows.length));
         });
         events.on("jobSettled", ({ job }) => seen.push(`settled ${job.listenerId} ${job.status}`));
 
@@ -265,5 +502,70 @@ describe("the probe", () => {
             ok: false,
             problem: { kind: "Unavailable" },
         });
+    });
+});
+
+describe("the Job's transitions", () => {
+    const queued: Job = {
+        id: 1,
+        kind: "import",
+        listenerId: BRISTOL,
+        username: "Bristol",
+        progress: { kind: "uncounted" },
+        status: "queued",
+    };
+    const running = transition(queued, { type: "started" });
+    const counted = { type: "counted", fetched: 1000, total: 2100, etaMs: 750 } as const;
+    const failure = { kind: "Transient", message: "Rate limit exceeded", code: 29 } as const;
+    const retry = { failures: 1, pausesAt: 5, inMs: 1000, error: failure };
+
+    test("a queued job starts running, uncounted, or is cancelled before it starts", () => {
+        expect(running).toEqual({ ...queued, status: "running" });
+        expect(
+            transition(queued, { type: "settled", outcome: { status: "cancelled" } }).status,
+        ).toBe("cancelled");
+    });
+
+    test("a stored page counts the job's progress, ending any retry", () => {
+        const retrying = transition(running, { type: "retrying", retry });
+        expect(retrying).toMatchObject({ status: "retrying", retry });
+
+        const after = transition(retrying, counted);
+        expect(after).toEqual({
+            ...queued,
+            status: "running",
+            progress: { kind: "counted", fetched: 1000, total: 2100, etaMs: 750 },
+        });
+        expect(after).not.toHaveProperty("retry");
+    });
+
+    test("pausing keeps the count and carries the error, dropping the retry", () => {
+        const retrying = transition(transition(running, counted), { type: "retrying", retry });
+
+        const paused = transition(retrying, {
+            type: "settled",
+            outcome: { status: "paused", error: failure },
+        });
+
+        expect(paused).toEqual({
+            ...queued,
+            status: "paused",
+            error: failure,
+            progress: { kind: "counted", fetched: 1000, total: 2100, etaMs: 750 },
+        });
+    });
+
+    test("an event the state doesn't accept leaves it unchanged", () => {
+        const done = transition(running, { type: "settled", outcome: { status: "done" } });
+
+        expect(transition(queued, counted)).toBe(queued);
+        expect(transition(queued, { type: "retrying", retry })).toBe(queued);
+        expect(transition(queued, { type: "settled", outcome: { status: "done" } })).toBe(queued);
+        expect(transition(running, { type: "started" })).toBe(running);
+        expect(transition(done, { type: "started" })).toBe(done);
+        expect(transition(done, counted)).toBe(done);
+        expect(
+            transition(done, { type: "settled", outcome: { status: "paused", error: failure } }),
+        ).toBe(done);
     });
 });

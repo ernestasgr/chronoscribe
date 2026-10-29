@@ -2,9 +2,10 @@
 import "fake-indexeddb/auto";
 import { beforeEach, describe, expect, test } from "vitest";
 import { respondRecentTracks, scrobbles, type FixtureUser } from "../../test-support/lastfm";
-import { openDb, type Db } from "../db";
+import { listenerId, openDb, type Db } from "../db";
+import { unixSeconds, unixSecondsAt } from "../lastfm";
 import { createEventBus } from "../events";
-import { createIngest, type IngestEvents } from "../ingest";
+import { createIngest, type IngestEvents, type Job, type Outcome } from "../ingest";
 import { buildStandings } from "../standings";
 import { createTimeline } from "../timeline";
 import { createSession, transition, type SessionState } from "./session";
@@ -12,6 +13,7 @@ import { createSettings } from "./settings";
 
 const API_KEY = "fixture-key";
 const NOW = Date.parse("2026-07-10T12:00:00Z");
+const BRISTOL = listenerId("Bristol");
 
 const bristol: FixtureUser = {
     username: "Bristol",
@@ -21,9 +23,13 @@ const bristol: FixtureUser = {
 const hidden: FixtureUser = { username: "Hidden", history: [], hidden: true };
 
 /** A session over real storage and services, with last.fm faked and builds run in-process. */
-async function setUp(db: Db) {
+async function setUp(
+    db: Db,
+    { apiKey, network }: { apiKey?: string; network?: { offline: boolean } } = {},
+) {
     const requests: URL[] = [];
     const events = createEventBus<IngestEvents>();
+    if (apiKey !== undefined) await db.saveSettings({ ...(await db.loadSettings()), apiKey });
     const settings = await createSettings(db);
     const ingest = createIngest({
         db,
@@ -32,6 +38,7 @@ async function setUp(db: Db) {
             now: () => NOW,
             sleep: async () => {},
             fetch: async (input) => {
+                if (network?.offline) throw new TypeError("Failed to fetch");
                 const url = new URL(input);
                 requests.push(url);
                 const { status, body } = respondRecentTracks(url, [bristol, hidden], API_KEY);
@@ -56,7 +63,7 @@ async function setUp(db: Db) {
         ingest,
         timeline,
         settings,
-        initial: undefined,
+        listeners: await db.listeners(),
         defaultTimeZone: "UTC",
     });
     const firstDay = () => timeline.store.getState().tables?.firstDay;
@@ -113,6 +120,71 @@ describe("setup", () => {
     });
 });
 
+describe("an unfinished import", () => {
+    let db: Db;
+    beforeEach(async () => {
+        db = openDb(`session-${crypto.randomUUID()}`);
+        // A reload stopped Bristol's import with only their 4 newest Scrobbles stored.
+        await db.putListener({
+            id: BRISTOL,
+            username: "Bristol",
+            timeZone: "UTC",
+            pinnedArtists: [],
+            importTo: unixSecondsAt(NOW),
+            importComplete: false,
+            pageSize: 1000,
+            lastViewedAt: NOW,
+        });
+        await db.addPage(
+            BRISTOL,
+            bristol.history.slice(-4).map((scrobble) => ({
+                ...scrobble,
+                listenerId: BRISTOL,
+                uts: unixSeconds(scrobble.uts),
+            })),
+            { last: false },
+        );
+    });
+
+    test("resumes on load behind the import screen, then shows the dashboard", async () => {
+        const { session, requests } = await setUp(db, { apiKey: API_KEY });
+
+        expect(session.store.getState().screen).toEqual({
+            kind: "importing",
+            listenerId: BRISTOL,
+            username: "Bristol",
+        });
+        await expect.poll(() => session.store.getState().screen.kind).toBe("dashboard");
+        expect(requests).toHaveLength(1);
+        expect(await db.scrobblesOf(BRISTOL)).toHaveLength(10);
+    });
+
+    test("pauses on a refused key, then resumes once Settings has a key last.fm takes", async () => {
+        const { session, ingest, settings } = await setUp(db, { apiKey: "wrong-key" });
+        await expect.poll(() => ingest.store.getState().queue.at(-1)?.status).toBe("paused");
+        expect(session.store.getState().screen.kind).toBe("importing");
+
+        await session.changeApiKey(API_KEY);
+
+        expect(storedKey(settings)).toBe(API_KEY);
+        await expect.poll(() => session.store.getState().screen.kind).toBe("dashboard");
+        expect(await db.scrobblesOf(BRISTOL)).toHaveLength(10);
+    });
+
+    test("pauses after a run of transient failures, then resumes when asked", async () => {
+        const network = { offline: true };
+        const { session, ingest } = await setUp(db, { apiKey: API_KEY, network });
+        await expect.poll(() => ingest.store.getState().queue.at(-1)?.status).toBe("paused");
+        expect(session.store.getState().screen.kind).toBe("importing");
+
+        network.offline = false;
+        await session.resumeImport();
+
+        await expect.poll(() => session.store.getState().screen.kind).toBe("dashboard");
+        expect(await db.scrobblesOf(BRISTOL)).toHaveLength(10);
+    });
+});
+
 describe("Settings", () => {
     let db: Db;
     beforeEach(() => {
@@ -161,35 +233,38 @@ describe("Settings", () => {
             timeZone: "America/Los_Angeles",
         });
         expect(requests).toHaveLength(requestsBefore);
-        expect(await db.listener("bristol")).toMatchObject({
+        expect(await db.listener(BRISTOL)).toMatchObject({
             timeZone: "America/Los_Angeles",
             importComplete: true,
         });
-        expect(await db.scrobblesOf("bristol")).toHaveLength(10);
+        expect(await db.scrobblesOf(BRISTOL)).toHaveLength(10);
     });
 });
 
-/** Bristol's Import job, settled with `status`. */
-const job = (status: "done" | "failed" | "cancelled") => ({
+/** Bristol's Import job, settled with `outcome`. */
+const job = (outcome: Outcome): Job => ({
     id: 1,
-    kind: "import" as const,
-    listenerId: "bristol",
+    kind: "import",
+    listenerId: BRISTOL,
     username: "Bristol",
-    status,
+    progress: { kind: "uncounted" },
+    ...outcome,
 });
+const offline = { kind: "Transient", message: "Network error" } as const;
 
 describe("the session's transitions", () => {
     const bristolRow = {
-        id: "bristol",
+        id: BRISTOL,
         username: "Bristol",
         timeZone: "UTC",
         pinnedArtists: [],
-        importTo: NOW / 1000,
+        importTo: unixSecondsAt(NOW),
         importComplete: true,
+        pageSize: 1000 as const,
         lastViewedAt: NOW,
     };
     const importing: SessionState = {
-        screen: { kind: "importing", listenerId: "bristol", username: "Bristol" },
+        screen: { kind: "importing", listenerId: BRISTOL, username: "Bristol" },
         apiKeyCheck: { kind: "idle" },
     };
     const dashboard: SessionState = {
@@ -197,11 +272,21 @@ describe("the session's transitions", () => {
         apiKeyCheck: { kind: "idle" },
     };
 
+    test("a paused import stays behind the import screen", () => {
+        expect(
+            transition(importing, {
+                type: "jobSettled",
+                job: job({ status: "paused", error: offline }),
+                listener: undefined,
+            }),
+        ).toBe(importing);
+    });
+
     test("a cancelled import is its own outcome, not a failure", () => {
         expect(
             transition(importing, {
                 type: "jobSettled",
-                job: job("cancelled"),
+                job: job({ status: "cancelled" }),
                 listener: undefined,
             }).screen,
         ).toEqual({
