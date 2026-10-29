@@ -1,5 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from "react";
-import { MAX_FAILURES, problemOf, type Job, type Retry } from "../ingest";
+import { MAX_FAILURES, problemOf, type Job, type JobProgress, type Retry } from "../ingest";
 import type { LastfmFailure } from "../lastfm";
 import {
     Button,
@@ -130,21 +130,25 @@ const retryText = ({ failures, pausesAt, inMs, error }: Retry) =>
     `${error.message} · retrying in ${seconds(inMs)} s (${failures} of ${pausesAt} failed)`;
 
 /** The status line: "48,000 / 96,451 Scrobbles · about 12 s left", or why it is waiting. */
-const progressText = ({ progress, etaMs, retry }: Job) => {
-    const counted = progress
-        ? `${progress.fetched.toLocaleString("en")} / ${progress.total.toLocaleString("en")} Scrobbles`
-        : "Starting…";
-    if (retry) return `${counted} · ${retryText(retry)}`;
-    return progress && etaMs ? `${counted} · ${formatEta(etaMs)}` : counted;
+const progressText = (job: Job) => {
+    const { progress } = job;
+    if (progress.kind === "uncounted") return "Starting…";
+    const counted = `${progress.fetched.toLocaleString("en")} / ${progress.total.toLocaleString("en")} Scrobbles`;
+    if (job.status === "retrying") return `${counted} · ${retryText(job.retry)}`;
+    return job.status === "running" && progress.etaMs > 0
+        ? `${counted} · ${formatEta(progress.etaMs)}`
+        : counted;
 };
+
+/** How full the progress bar is, in percent. */
+const percentOf = (progress: JobProgress) =>
+    progress.kind === "counted" ? (100 * progress.fetched) / Math.max(progress.total, 1) : 0;
 
 function Importing({ listenerId, username }: { listenerId: string; username: string }) {
     const job = useQueue(({ queue }) =>
         queue.findLast((queued) => queued.listenerId === listenerId),
     );
-    const percent = job?.progress
-        ? (100 * job.progress.fetched) / Math.max(job.progress.total, 1)
-        : 0;
+    const percent = job ? percentOf(job.progress) : 0;
 
     return (
         <Centered>
@@ -158,9 +162,7 @@ function Importing({ listenerId, username }: { listenerId: string; username: str
                 <p role="status" className="text-sm text-muted-foreground tabular-nums">
                     {job ? progressText(job) : "Starting…"}
                 </p>
-                {job?.status === "paused" && job.error && (
-                    <Paused error={job.error} username={username} />
-                )}
+                {job?.status === "paused" && <Paused error={job.error} username={username} />}
             </CardContent>
         </Centered>
     );

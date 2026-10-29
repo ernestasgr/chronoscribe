@@ -10,7 +10,7 @@ import {
 } from "../../test-support/lastfm";
 import { openDb, type Db } from "../db";
 import { createEventBus } from "../events";
-import { createIngest, type IngestEvents, type Job, type JobStatus } from ".";
+import { createIngest, transition, type IngestEvents, type Job, type JobStatus } from ".";
 
 const API_KEY = "fixture-key";
 const NOW = Date.parse("2026-07-10T12:00:00Z");
@@ -163,7 +163,11 @@ describe("the Import job", () => {
         const seen: { status: JobStatus; fetched?: number; etaMs?: number }[] = [];
         const unsubscribe = ingest.store.subscribe(({ queue: [job] }) => {
             if (job)
-                seen.push({ status: job.status, fetched: job.progress?.fetched, etaMs: job.etaMs });
+                seen.push(
+                    job.progress.kind === "counted"
+                        ? { status: job.status, ...job.progress }
+                        : { status: job.status },
+                );
         });
         await ingest.enqueueImport(request("Bristol"));
         unsubscribe();
@@ -206,7 +210,8 @@ describe("the Import job", () => {
     test("cancelling a Listener aborts their running job and keeps it incomplete", async () => {
         const { ingest, requests } = setUp();
         const unsubscribe = ingest.store.subscribe(({ queue: [job] }) => {
-            if (job?.progress && job.status === "running") ingest.cancel("bristol");
+            if (job?.progress.kind === "counted" && job.status === "running")
+                ingest.cancel("bristol");
         });
         const job = await ingest.enqueueImport(request("Bristol"));
         unsubscribe();
@@ -254,7 +259,8 @@ describe("the Import job", () => {
     async function interruptAfterFirstPage(username: string) {
         const { ingest } = setUp([twins, bristol]);
         const unsubscribe = ingest.store.subscribe(({ queue: [job] }) => {
-            if (job?.progress && job.status === "running") ingest.cancel(username.toLowerCase());
+            if (job?.progress.kind === "counted" && job.status === "running")
+                ingest.cancel(username.toLowerCase());
         });
         await ingest.enqueueImport(request(username));
         unsubscribe();
@@ -309,13 +315,13 @@ describe("the Import job", () => {
         expect(sleeps.filter((ms) => ms >= 1000)).toEqual([
             1000, 1000, 2000, 4000, 1000, 2000, 4000, 8000,
         ]);
-        expect(seen.map((s) => s.retry).filter(Boolean)).toContainEqual({
+        expect(seen.flatMap((s) => (s.status === "retrying" ? [s.retry] : []))).toContainEqual({
             failures: 2,
             pausesAt: 5,
             inMs: 2000,
             error: expect.objectContaining({ kind: "Transient", code: 8 }),
         });
-        expect(seen.at(-1)?.retry).toBeUndefined();
+        expect(seen.at(-1)?.status).toBe("done");
         expect(lines(await db.scrobblesOf("bristol"))).toEqual(
             lines(bristol.history.filter(({ artist }) => artist !== "Tricky")),
         );
@@ -335,7 +341,6 @@ describe("the Import job", () => {
             error: { kind: "Transient", code: 29 },
             progress: { fetched: 999, total: 2100 },
         });
-        expect(paused.retry).toBeUndefined();
         // One failure at 1000 switches to a new request of 200, which then fails 5 times in a row.
         expect(
             pageRequests(requests)
@@ -494,5 +499,70 @@ describe("the probe", () => {
             ok: false,
             problem: { kind: "Unavailable" },
         });
+    });
+});
+
+describe("the Job's transitions", () => {
+    const queued: Job = {
+        id: 1,
+        kind: "import",
+        listenerId: "bristol",
+        username: "Bristol",
+        progress: { kind: "uncounted" },
+        status: "queued",
+    };
+    const running = transition(queued, { type: "started" });
+    const counted = { type: "counted", fetched: 1000, total: 2100, etaMs: 750 } as const;
+    const failure = { kind: "Transient", message: "Rate limit exceeded", code: 29 } as const;
+    const retry = { failures: 1, pausesAt: 5, inMs: 1000, error: failure };
+
+    test("a queued job starts running, uncounted, or is cancelled before it starts", () => {
+        expect(running).toEqual({ ...queued, status: "running" });
+        expect(
+            transition(queued, { type: "settled", outcome: { status: "cancelled" } }).status,
+        ).toBe("cancelled");
+    });
+
+    test("a stored page counts the job's progress, ending any retry", () => {
+        const retrying = transition(running, { type: "retrying", retry });
+        expect(retrying).toMatchObject({ status: "retrying", retry });
+
+        const after = transition(retrying, counted);
+        expect(after).toEqual({
+            ...queued,
+            status: "running",
+            progress: { kind: "counted", fetched: 1000, total: 2100, etaMs: 750 },
+        });
+        expect(after).not.toHaveProperty("retry");
+    });
+
+    test("pausing keeps the count and carries the error, dropping the retry", () => {
+        const retrying = transition(transition(running, counted), { type: "retrying", retry });
+
+        const paused = transition(retrying, {
+            type: "settled",
+            outcome: { status: "paused", error: failure },
+        });
+
+        expect(paused).toEqual({
+            ...queued,
+            status: "paused",
+            error: failure,
+            progress: { kind: "counted", fetched: 1000, total: 2100, etaMs: 750 },
+        });
+    });
+
+    test("an event the state doesn't accept leaves it unchanged", () => {
+        const done = transition(running, { type: "settled", outcome: { status: "done" } });
+
+        expect(transition(queued, counted)).toBe(queued);
+        expect(transition(queued, { type: "retrying", retry })).toBe(queued);
+        expect(transition(queued, { type: "settled", outcome: { status: "done" } })).toBe(queued);
+        expect(transition(running, { type: "started" })).toBe(running);
+        expect(transition(done, { type: "started" })).toBe(done);
+        expect(transition(done, counted)).toBe(done);
+        expect(
+            transition(done, { type: "settled", outcome: { status: "paused", error: failure } }),
+        ).toBe(done);
     });
 });

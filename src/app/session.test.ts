@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, test } from "vitest";
 import { respondRecentTracks, scrobbles, type FixtureUser } from "../../test-support/lastfm";
 import { openDb, type Db } from "../db";
 import { createEventBus } from "../events";
-import { createIngest, type IngestEvents } from "../ingest";
+import { createIngest, type IngestEvents, type Job, type Outcome } from "../ingest";
 import { buildStandings } from "../standings";
 import { createTimeline } from "../timeline";
 import { createSession, transition, type SessionState } from "./session";
@@ -235,14 +235,16 @@ describe("Settings", () => {
     });
 });
 
-/** Bristol's Import job, settled with `status`. */
-const job = (status: "done" | "paused" | "failed" | "cancelled") => ({
+/** Bristol's Import job, settled with `outcome`. */
+const job = (outcome: Outcome): Job => ({
     id: 1,
-    kind: "import" as const,
+    kind: "import",
     listenerId: "bristol",
     username: "Bristol",
-    status,
+    progress: { kind: "uncounted" },
+    ...outcome,
 });
+const offline = { kind: "Transient", message: "Network error" } as const;
 
 describe("the session's transitions", () => {
     const bristolRow = {
@@ -266,7 +268,11 @@ describe("the session's transitions", () => {
 
     test("a paused import stays behind the import screen", () => {
         expect(
-            transition(importing, { type: "jobSettled", job: job("paused"), listener: undefined }),
+            transition(importing, {
+                type: "jobSettled",
+                job: job({ status: "paused", error: offline }),
+                listener: undefined,
+            }),
         ).toBe(importing);
     });
 
@@ -274,7 +280,7 @@ describe("the session's transitions", () => {
         expect(
             transition(importing, {
                 type: "jobSettled",
-                job: job("cancelled"),
+                job: job({ status: "cancelled" }),
                 listener: undefined,
             }).screen,
         ).toEqual({

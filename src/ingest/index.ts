@@ -26,26 +26,89 @@ export const browserTransport: Transport = {
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 };
 
-/** `paused` keeps what was fetched and waits for the user to resume; `failed` is a bug. */
-export type JobStatus = "queued" | "running" | "paused" | "done" | "failed" | "cancelled";
+/** How far a job has got: nothing counted before its first page, then a count with the time left. */
+export type JobProgress =
+    | { kind: "uncounted" }
+    | {
+          kind: "counted";
+          fetched: number;
+          total: number;
+          /** Milliseconds left, from a moving average of recent page times. */
+          etaMs: number;
+      };
 
-export interface JobProgress {
-    fetched: number;
-    total: number;
-}
+/** How a job settled: `paused` keeps what was fetched and waits to be resumed; `failed` is a bug. */
+export type Outcome =
+    | { status: "paused"; error: LastfmFailure }
+    | { status: "done" }
+    | { status: "failed"; error: LastfmFailure }
+    | { status: "cancelled" };
 
-export interface Job {
+/** Where a job is in its lifecycle, each status carrying only what it can have. */
+export type JobState =
+    | { status: "queued" }
+    | { status: "running" }
+    | { status: "retrying"; retry: Retry }
+    | Outcome;
+
+export type JobStatus = JobState["status"];
+
+/** Who a job is for and how far it has got, whatever its state. */
+interface JobBase {
     id: number;
     kind: "import";
     listenerId: string;
     username: string;
-    status: JobStatus;
-    progress?: JobProgress;
-    /** Milliseconds left, from a moving average of recent page times. */
-    etaMs?: number;
-    /** The wait before retrying a request that failed transiently, while there is one. */
-    retry?: Retry;
-    error?: LastfmFailure;
+    progress: JobProgress;
+}
+
+export type Job = JobBase & JobState;
+
+/** Everything that moves a job along, from its own run. */
+export type JobEvent =
+    | { type: "started" }
+    | { type: "counted"; fetched: number; total: number; etaMs: number }
+    | { type: "retrying"; retry: Retry }
+    | { type: "settled"; outcome: Outcome };
+
+/** A job without what its state carries, ready for its next state. */
+const baseOf = (job: Job): JobBase => ({
+    id: job.id,
+    kind: job.kind,
+    listenerId: job.listenerId,
+    username: job.username,
+    progress: job.progress,
+});
+
+/** The job after `event`; an event the current state doesn't accept leaves it unchanged. */
+export function transition(job: Job, event: JobEvent): Job {
+    switch (job.status) {
+        case "queued":
+            if (event.type === "started") return { ...baseOf(job), status: "running" };
+            return event.type === "settled" && event.outcome.status === "cancelled"
+                ? { ...baseOf(job), ...event.outcome }
+                : job;
+        case "running":
+        case "retrying":
+            switch (event.type) {
+                case "started":
+                    return job;
+                case "counted": {
+                    const { type: _type, ...counted } = event;
+                    return {
+                        ...baseOf(job),
+                        progress: { kind: "counted", ...counted },
+                        status: "running",
+                    };
+                }
+                case "retrying":
+                    return { ...baseOf(job), status: "retrying", retry: event.retry };
+                case "settled":
+                    return { ...baseOf(job), ...event.outcome };
+            }
+        default:
+            return job;
+    }
 }
 
 /** Transient failures being waited out: `failures` in a row, pausing at `pausesAt`, retrying in `inMs`. */
@@ -95,9 +158,15 @@ const PROBE_PROBLEMS: Readonly<Record<number, ProbeProblem>> = {
 export const problemOf = ({ code, message }: LastfmFailure): ProbeProblem =>
     (code === undefined ? undefined : PROBE_PROBLEMS[code]) ?? { kind: "Unavailable", message };
 
+const SETTLED: ReadonlySet<JobStatus> = new Set<Outcome["status"]>([
+    "paused",
+    "done",
+    "failed",
+    "cancelled",
+]);
+
 /** Whether a job has stopped running; a paused import resumes as a new job. */
-export const isSettled = ({ status }: Job): boolean =>
-    status === "done" || status === "paused" || status === "failed" || status === "cancelled";
+export const isSettled = ({ status }: Job): boolean => SETTLED.has(status);
 
 const average = (values: readonly number[]) =>
     values.reduce((sum, value) => sum + value, 0) / Math.max(values.length, 1);
@@ -118,14 +187,10 @@ interface Cursor {
 export const backoffMs = (failures: number): number => FIRST_BACKOFF_MS * 2 ** (failures - 1);
 
 /** The outcome of an import that stopped on `error`, keeping everything it stored. */
-const paused = (error: LastfmFailure): Partial<Job> => ({
-    status: "paused",
-    error,
-    retry: undefined,
-});
+const paused = (error: LastfmFailure): Outcome => ({ status: "paused", error });
 
-const withJob = (queue: readonly Job[], id: number, changes: Partial<Job>): Job[] =>
-    queue.map((job) => (job.id === id ? { ...job, ...changes } : job));
+const withEvent = (queue: readonly Job[], id: number, event: JobEvent): Job[] =>
+    queue.map((job) => (job.id === id ? transition(job, event) : job));
 
 /** Resolves when the caller may send its request: each caller waits its turn, `gapMs` apart. */
 function createThrottle({ now, sleep }: Transport, gapMs: number): () => Promise<void> {
@@ -163,8 +228,8 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
     /** Each Listener's import that hasn't settled, which a new request for them joins. */
     const unsettled = new Map<string, Promise<Job>>();
 
-    const patch = (id: number, changes: Partial<Job>) =>
-        store.setState(({ queue }) => ({ queue: withJob(queue, id, changes) }));
+    const dispatch = (id: number, event: JobEvent) =>
+        store.setState(({ queue }) => ({ queue: withEvent(queue, id, event) }));
     const jobOf = (id: number) => store.getState().queue.find((job) => job.id === id)!;
 
     /** The Listener's row to import into: their unfinished one to resume, or a fresh one. */
@@ -214,7 +279,7 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
         id: number,
         request: ImportRequest,
         signal: AbortSignal,
-    ): Promise<Partial<Job>> {
+    ): Promise<Outcome> {
         const row = await importRow(request);
         let cursor = await resumeFrom(row, row.pageSize);
         let pageTimes: number[] = [];
@@ -224,10 +289,11 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
         const report = () => {
             if (total === undefined) return;
             const pagesLeft = Math.ceil((total - cursor.fetched) / cursor.pageSize);
-            patch(id, {
-                progress: { fetched: cursor.fetched, total },
+            dispatch(id, {
+                type: "counted",
+                fetched: cursor.fetched,
+                total,
                 etaMs: etaMs(pageTimes, pagesLeft),
-                retry: undefined,
             });
         };
         // Pages of 200 are a new request, timed and counted afresh.
@@ -260,7 +326,10 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
                 failures++;
                 if (failures >= MAX_FAILURES) return paused(error);
                 const inMs = backoffMs(failures);
-                patch(id, { retry: { failures, pausesAt: MAX_FAILURES, inMs, error } });
+                dispatch(id, {
+                    type: "retrying",
+                    retry: { failures, pausesAt: MAX_FAILURES, inMs, error },
+                });
                 await sleepUnlessAborted(inMs, signal);
                 if (cursor.pageSize !== SMALL_PAGE) await switchToSmallPages();
                 continue;
@@ -292,7 +361,7 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
         }
         // One event for the whole import: its history is only shown once it is complete.
         events.emit("scrobblesChanged", { listenerId: row.id });
-        return { status: "done", etaMs: 0 };
+        return { status: "done" };
     }
 
     /** Queues an Import job, or joins the Listener's unsettled one; resolves to it once settled. */
@@ -311,6 +380,7 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
                     kind: "import",
                     listenerId: listener,
                     username: request.username,
+                    progress: { kind: "uncounted" },
                     status: "queued",
                 },
             ],
@@ -328,15 +398,14 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
     }
 
     async function run(id: number, request: ImportRequest, signal: AbortSignal): Promise<void> {
-        if (signal.aborted) return patch(id, { status: "cancelled" });
-        patch(id, { status: "running" });
-        const outcome = await runImport(id, request, signal).catch(
-            (error: unknown): Partial<Job> => ({
-                status: "failed",
-                error: { kind: "Transient", message: String(error) },
-            }),
-        );
-        patch(id, outcome);
+        if (signal.aborted)
+            return dispatch(id, { type: "settled", outcome: { status: "cancelled" } });
+        dispatch(id, { type: "started" });
+        const outcome = await runImport(id, request, signal).catch((error: unknown): Outcome => ({
+            status: "failed",
+            error: { kind: "Transient", message: String(error) },
+        }));
+        dispatch(id, { type: "settled", outcome });
     }
 
     /** Cancels a Listener's queued jobs and aborts their running one. */

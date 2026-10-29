@@ -56,7 +56,10 @@ const setupScreen = (status: SetupStatus): Screen => ({ kind: "setup", status })
 const unfinished = (job: Job): SetupProblem =>
     job.status === "cancelled"
         ? { kind: "ImportCancelled" }
-        : { kind: "ImportFailed", message: job.error?.message ?? "Import failed" };
+        : {
+              kind: "ImportFailed",
+              message: job.status === "failed" ? job.error.message : "Import failed",
+          };
 
 /**
  * Whether a probe problem keeps a new key from being saved. A missing or private Listener still
