@@ -5,7 +5,10 @@ import {
     dailyPlays,
     dayDate,
     dayScrobbles,
+    daysOutsideTopX,
     drawnLines,
+    resolvePins,
+    searchArtists,
     topX,
     valueAt,
     type LinesRule,
@@ -337,6 +340,20 @@ describe("drawnLines", () => {
         expect(lines(56, 60, 1, [], "seven-days")).toEqual(["Late"]);
     });
 
+    const outside = (name: string, from: number, to: number, x = 1) =>
+        daysOutsideTopX(tables, idOf(name), x, from, to);
+
+    test("a Pinned Artist is outside the Top X on runs of Days, unranked Days included", () => {
+        expect(outside("Early", 30, 40)).toEqual([{ start: 35, end: 40 }]);
+        expect(outside("Mid", 30, 55)).toEqual([
+            { start: 30, end: 34 },
+            { start: 50, end: 55 },
+        ]);
+        expect(outside("Mid", 30, 55, 3)).toEqual([{ start: 30, end: 34 }]);
+        expect(outside("Late", 40, 60)).toEqual([{ start: 40, end: 49 }]);
+        expect(outside("Late", 50, 60)).toEqual([]);
+    });
+
     test("is memoised on the integer window bounds, X, rule, pins and tables", () => {
         const pinned = [idOf("Opener")];
         const drawn = drawnLines(tables, { start: 35.2, end: 45.1 }, 1, "warm-up", pinned);
@@ -360,5 +377,38 @@ describe("drawnLines", () => {
         expect(drawnLines(rebuilt, { start: 35.2, end: 45.1 }, 1, "warm-up", pinned)).not.toBe(
             drawn,
         );
+    });
+});
+
+describe("Pinned Artists", () => {
+    const tables = buildStandings(
+        [
+            scrobble("2026-07-01T08:00:00Z", "Massive Attack"),
+            scrobble("2026-07-01T09:00:00Z", "Portishead"),
+            scrobble("2026-07-01T10:00:00Z", "Portishead"),
+            scrobble("2026-07-02T08:00:00Z", "Tricky"),
+        ],
+        { timeZone: "UTC", today: uts("2026-07-02T12:00:00Z") },
+    );
+
+    test("resolve by exact name in the order pinned, hiding names the tables don't have", () => {
+        expect(
+            resolvePins(tables, ["Tricky", "Burial", "massive attack", "Massive Attack"]),
+        ).toEqual([
+            { id: tables.artists.indexOf("Tricky"), artist: "Tricky" },
+            { id: tables.artists.indexOf("Massive Attack"), artist: "Massive Attack" },
+        ]);
+    });
+
+    test("search matches any part of a name in any case, best Standing on the Day first", () => {
+        // On 1 July Portishead lead Massive Attack, and Tricky is unranked until 2 July.
+        expect(searchArtists(tables, "T", 0, 10)).toEqual([
+            "Portishead",
+            "Massive Attack",
+            "Tricky",
+        ]);
+        expect(searchArtists(tables, "tt", 0, 10)).toEqual(["Massive Attack"]);
+        expect(searchArtists(tables, "t", 0, 2)).toEqual(["Portishead", "Massive Attack"]);
+        expect(searchArtists(tables, "  ", 0, 10)).toEqual([]);
     });
 });

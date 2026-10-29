@@ -6,7 +6,7 @@ import {
     RefreshCwIcon,
     SettingsIcon,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { z } from "zod";
 import { useShallow } from "zustand/react/shallow";
 import { Chart, Minimap, type ChartOptions } from "../chart";
@@ -18,9 +18,11 @@ import {
     dailyPlays,
     dayDate,
     dayScrobbles,
+    resolvePins,
     topX,
     type Climber,
     type ClimbersMode,
+    type PinnedArtist,
     type StandingsTables,
 } from "../standings";
 import { useFocusDay, usePlaying, useTables, useTimeline, type Timeline } from "../timeline";
@@ -46,6 +48,7 @@ import { ApiKeyForm, TimeZoneSelect } from "./fields";
 import { useFlip } from "./flip";
 import { count, MINUTE_MS, syncAge, useNow } from "./labels";
 import { ListenerMenu } from "./ListenerMenu";
+import { Pins } from "./Pins";
 import { useQueue, useServices, useSettings } from "./services";
 
 const validX = (value: number) => Number.isInteger(value) && value >= 1 && value <= 100;
@@ -102,6 +105,11 @@ export function Dashboard({ listener }: { listener: ListenerRow }) {
     );
     const day = useFocusDay();
     usePlayerKeys(useTimeline());
+    // Pins are resolved against each new tables object; one that no longer resolves stays hidden.
+    const pins = useMemo(
+        () => (tables ? resolvePins(tables, listener.pinnedArtists) : []),
+        [tables, listener.pinnedArtists],
+    );
 
     if (!tables)
         return (
@@ -121,9 +129,10 @@ export function Dashboard({ listener }: { listener: ListenerRow }) {
                 x={x}
                 mode={mode}
                 options={options}
+                pins={pins}
             />
             <Card className="min-h-80 gap-2 overflow-hidden p-2">
-                <Chart tables={tables} x={x} options={options} />
+                <Chart tables={tables} x={x} options={options} pins={pins} />
                 <Minimap tables={tables} />
             </Card>
             <Card
@@ -153,6 +162,7 @@ function Toolbar({
     x,
     mode,
     options,
+    pins,
 }: {
     listener: ListenerRow;
     tables: StandingsTables;
@@ -160,6 +170,7 @@ function Toolbar({
     x: number;
     mode: ClimbersMode;
     options: ChartOptions;
+    pins: readonly PinnedArtist[];
 }) {
     const { settings } = useServices();
     const inScrobblesMode = options.yAxis !== "standing";
@@ -184,6 +195,7 @@ function Toolbar({
                 />
             </div>
             <Player />
+            <Pins listener={listener} tables={tables} day={day} pins={pins} />
             <div className="flex items-center gap-2">
                 <Label htmlFor="top-x">X</Label>
                 <Input

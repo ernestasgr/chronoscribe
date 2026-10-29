@@ -78,6 +78,14 @@ const unfinished = (job: Job): SetupProblem =>
 const refusesKey = ({ kind }: ProbeProblem): boolean =>
     kind === "InvalidKey" || kind === "Unavailable";
 
+/** The Pinned Artists with `artist` added at the end, unless already pinned. */
+const withPin = (pins: readonly string[], artist: string): string[] =>
+    pins.includes(artist) ? [...pins] : [...pins, artist];
+
+/** The Pinned Artists without `artist`. */
+const withoutPin = (pins: readonly string[], artist: string): string[] =>
+    pins.filter((pinned) => pinned !== artist);
+
 const byRecentView = (listeners: readonly ListenerRow[]): ListenerRow[] =>
     listeners.toSorted((a, b) => b.lastViewedAt - a.lastViewedAt);
 
@@ -305,6 +313,16 @@ export function createSession({
         await reload();
     }
 
+    /** Stores the dashboard Listener's Pinned Artists as `change` leaves them; the tables stay as they are. */
+    async function changePins(change: (pins: readonly string[]) => string[]): Promise<void> {
+        const listener = currentListener();
+        if (!listener) return;
+        const pinnedArtists = change(listener.pinnedArtists);
+        dispatch({ type: "listenerChanged", listener: { ...listener, pinnedArtists } });
+        await db.updateListener(listener.id, { pinnedArtists });
+        await reload();
+    }
+
     events.on("jobSettled", async ({ job }) => {
         const listener = job.status === "done" ? await db.listener(job.listenerId) : undefined;
         void reload();
@@ -407,6 +425,12 @@ export function createSession({
                 apiKey: settings.store.getState().apiKey,
             });
         },
+
+        /** Pins an Artist, by name, for the dashboard's Listener. */
+        pin: (artist: string): Promise<void> => changePins((pins) => withPin(pins, artist)),
+
+        /** Unpins an Artist, by name, for the dashboard's Listener. */
+        unpin: (artist: string): Promise<void> => changePins((pins) => withoutPin(pins, artist)),
 
         /** Moves the current Listener's Days to `timeZone`, rebuilding the tables from what is stored. */
         async changeTimeZone(timeZone: string): Promise<void> {
