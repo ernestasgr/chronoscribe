@@ -1,5 +1,12 @@
 import { useState, type FormEvent, type ReactNode } from "react";
-import { MAX_FAILURES, problemOf, type Job, type JobProgress, type Retry } from "../ingest";
+import {
+    isSettled,
+    MAX_FAILURES,
+    problemOf,
+    type Job,
+    type JobProgress,
+    type Retry,
+} from "../ingest";
 import type { ListenerId } from "../db";
 import type { LastfmFailure } from "../lastfm";
 import {
@@ -14,6 +21,7 @@ import {
     Progress,
 } from "../ui";
 import { Dashboard } from "./Dashboard";
+import { ListenerMenu } from "./ListenerMenu";
 import {
     ApiKeyForm,
     describedBy,
@@ -52,6 +60,12 @@ function Centered({ children }: { children: ReactNode }) {
 function Setup({ status }: { status: SetupStatus }) {
     const { session } = useServices();
     const storedKey = useSettings((settings) => settings.apiKey);
+    const listed = useSession((state) => state.listeners.length > 0);
+    const importing = useQueue(({ queue }) =>
+        queue.some((job) => job.kind === "import" && !isSettled(job)),
+    );
+    // Setup can be left for any Listener there is to go back to.
+    const hasListeners = listed || importing;
     const [username, setUsername] = useState("");
     const [apiKey, setApiKey] = useState(storedKey);
     const [timeZone, setTimeZone] = useState(session.defaultTimeZone);
@@ -112,6 +126,15 @@ function Setup({ status }: { status: SetupStatus }) {
                     <Button type="submit" disabled={status.kind === "checking"}>
                         {status.kind === "checking" ? "Checking…" : "Import"}
                     </Button>
+                    {hasListeners && (
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            onClick={() => void session.cancelAdding()}
+                        >
+                            Cancel
+                        </Button>
+                    )}
                 </form>
             </CardContent>
         </Centered>
@@ -153,10 +176,11 @@ function Importing({ listenerId, username }: { listenerId: ListenerId; username:
 
     return (
         <Centered>
-            <CardHeader>
+            <CardHeader className="flex flex-wrap items-center justify-between gap-2">
                 <CardTitle>
                     <h1 className="text-xl">Importing {username}</h1>
                 </CardTitle>
+                <ListenerMenu current={{ id: listenerId, username }}>Listeners</ListenerMenu>
             </CardHeader>
             <CardContent className="grid gap-3">
                 <Progress value={percent} aria-label="Import progress" />

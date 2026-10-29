@@ -74,7 +74,8 @@ export type JobState =
 export type JobStatus = JobState["status"];
 
 /** An Import fetches a whole history; a Sync fetches its recent window again. */
-export type JobKind = "import" | "sync";
+const JOB_KINDS = ["import", "sync"] as const;
+export type JobKind = (typeof JOB_KINDS)[number];
 
 /** Who a job is for and how far it has got, whatever its state. */
 interface JobBase {
@@ -218,6 +219,9 @@ export const backoffMs = (failures: number): number => FIRST_BACKOFF_MS * 2 ** (
 /** The outcome of an import that stopped on `error`, keeping everything it stored. */
 const paused = (error: LastfmFailure): Outcome => ({ status: "paused", error });
 
+/** Which unsettled job a new request joins: one per Listener and kind. */
+const unsettledKey = (kind: JobKind, listener: ListenerId) => `${kind} ${listener}`;
+
 const withEvent = (queue: readonly Job[], id: number, event: JobEvent): Job[] =>
     queue.map((job) => (job.id === id ? transition(job, event) : job));
 
@@ -254,31 +258,34 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
             signal.addEventListener("abort", () => resolve(), { once: true });
             void transport.sleep(ms).then(resolve);
         });
-    /** Each Listener's import that hasn't settled, which a new request for them joins. */
+    /** Each Listener's job of each kind that hasn't settled, which a new request for them joins. */
     const unsettled = new Map<string, Promise<Job>>();
 
     const dispatch = (id: number, event: JobEvent) =>
         store.setState(({ queue }) => ({ queue: withEvent(queue, id, event) }));
     const jobOf = (id: number) => store.getState().queue.find((job) => job.id === id)!;
 
-    /** The Listener's row to import into: their unfinished one to resume, or a fresh one. */
-    async function importRow({ username, timeZone }: ImportRequest): Promise<ListenerRow> {
+    /** The row to import into: an unfinished one, resumed as it was, or a fresh one viewed at `queuedAt`. */
+    async function importRow(
+        { username, timeZone }: ImportRequest,
+        queuedAt: number,
+    ): Promise<ListenerRow> {
         const id = listenerId(username);
         const existing = await db.listener(id);
-        const lastViewedAt = transport.now();
+        const startedAt = transport.now();
         const resuming = existing !== undefined && !existing.importComplete;
         const row: ListenerRow = resuming
-            ? { ...existing, timeZone, lastViewedAt }
+            ? { ...existing, timeZone }
             : {
                   id,
                   username,
                   timeZone,
                   pinnedArtists: existing?.pinnedArtists ?? [],
-                  importTo: unixSecondsAt(lastViewedAt),
+                  importTo: unixSecondsAt(startedAt),
                   importComplete: false,
                   pageSize: existing?.pageSize ?? PAGE_SIZES[0],
-                  lastViewedAt,
-                  syncedAt: unixSecondsAt(lastViewedAt),
+                  lastViewedAt: queuedAt,
+                  syncedAt: unixSecondsAt(startedAt),
               };
         // A finished history is imported again from nothing.
         if (!resuming) await db.deleteScrobblesOf(id);
@@ -308,9 +315,10 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
     async function runImport(
         id: number,
         request: ImportRequest,
+        queuedAt: number,
         signal: AbortSignal,
     ): Promise<Outcome> {
-        const row = await importRow(request);
+        const row = await importRow(request, queuedAt);
         let cursor = await resumeFrom(row, row.pageSize);
         let pageTimes: number[] = [];
         let total: number | undefined;
@@ -480,7 +488,7 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
         work: (id: number, signal: AbortSignal) => Promise<Outcome>,
     ): Promise<Job> {
         const listener = listenerId(username);
-        const key = `${kind} ${listener}`;
+        const key = unsettledKey(kind, listener);
         const joined = unsettled.get(key);
         if (joined) return joined;
         const id = runs.nextId++;
@@ -500,8 +508,20 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
             ],
         }));
 
-        runs.tail = runs.tail.then(() => run(id, work, controller.signal));
-        const settled = runs.tail.then(() => {
+        // A job cancelled while queued settles at once, without waiting for its turn.
+        const finished = new Promise<void>((resolve) => {
+            controller.signal.addEventListener(
+                "abort",
+                () => {
+                    if (jobOf(id).status !== "queued") return;
+                    dispatch(id, { type: "settled", outcome: { status: "cancelled" } });
+                    resolve();
+                },
+                { once: true },
+            );
+            runs.tail = runs.tail.then(() => run(id, work, controller.signal)).then(resolve);
+        });
+        const settled = finished.then(() => {
             controllers.delete(id);
             unsettled.delete(key);
             events.emit("jobSettled", { job: jobOf(id) });
@@ -516,8 +536,7 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
         work: (id: number, signal: AbortSignal) => Promise<Outcome>,
         signal: AbortSignal,
     ): Promise<void> {
-        if (signal.aborted)
-            return dispatch(id, { type: "settled", outcome: { status: "cancelled" } });
+        if (isSettled(jobOf(id))) return;
         dispatch(id, { type: "started" });
         const outcome = await work(id, signal).catch((error: unknown): Outcome => ({
             status: "failed",
@@ -527,8 +546,12 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
     }
 
     /** Queues an Import job, or joins the Listener's unsettled one; resolves to it once settled. */
-    const enqueueImport = (request: ImportRequest): Promise<Job> =>
-        enqueue("import", request.username, (id, signal) => runImport(id, request, signal));
+    const enqueueImport = (request: ImportRequest): Promise<Job> => {
+        const queuedAt = transport.now();
+        return enqueue("import", request.username, (id, signal) =>
+            runImport(id, request, queuedAt, signal),
+        );
+    };
 
     /** Queues a Sync of a finished Listener, or joins their unsettled one; resolves to it once settled. */
     const enqueueSync = (request: SyncRequest): Promise<Job> =>
@@ -542,6 +565,16 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
             .forEach((job) => controllers.get(job.id)?.abort());
     }
 
+    /** Cancels a Listener's jobs, waits for a running one to stop, then deletes them in one transaction. */
+    async function removeListener(listener: ListenerId): Promise<void> {
+        const pending = JOB_KINDS.flatMap(
+            (kind) => unsettled.get(unsettledKey(kind, listener)) ?? [],
+        );
+        cancel(listener);
+        await Promise.all(pending);
+        await db.deleteListener(listener);
+    }
+
     /** Checks a username and API key with one `limit=1` request, in turn with the queue's requests. */
     async function probe(username: string, apiKey: string): Promise<ProbeResult> {
         await throttle();
@@ -552,7 +585,7 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
         return result.ok ? { ok: true } : { ok: false, problem: problemOf(result.error) };
     }
 
-    return { store, enqueueImport, enqueueSync, cancel, probe };
+    return { store, enqueueImport, enqueueSync, cancel, removeListener, probe };
 }
 
 export type Ingest = ReturnType<typeof createIngest>;

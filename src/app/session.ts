@@ -1,19 +1,21 @@
 import { createStore, type StoreApi } from "zustand";
 import { listenerId, mostRecentlyViewed, type Db, type ListenerId, type ListenerRow } from "../db";
 import type { Subscriber } from "../events";
-import type {
-    ImportRequest,
-    Ingest,
-    IngestEvents,
-    Job,
-    ProbeProblem,
-    ProbeResult,
+import {
+    isSettled,
+    type ImportRequest,
+    type Ingest,
+    type IngestEvents,
+    type Job,
+    type ProbeProblem,
+    type ProbeResult,
 } from "../ingest";
 import type { Timeline } from "../timeline";
 import type { Settings } from "./settings";
 
-/** Why setup is showing a message: the probe turned the inputs down, or the import didn't finish. */
+/** Why setup shows a message: a taken username, a probe that turned it down, or an unfinished import. */
 export type SetupProblem =
+    | { kind: "ListenerTaken" }
     | ProbeProblem
     | { kind: "ImportFailed"; message: string }
     | { kind: "ImportCancelled" };
@@ -39,12 +41,20 @@ export type Screen =
 export interface SessionState {
     screen: Screen;
     apiKeyCheck: ApiKeyCheck;
+    /** Every stored Listener, most recently viewed first. */
+    listeners: readonly ListenerRow[];
 }
 
 /** Everything that moves the session along, from the user or from settled work. */
 export type SessionEvent =
     | { type: "submitted" }
+    | { type: "taken"; username: string }
     | { type: "probed"; username: string; result: ProbeResult }
+    | { type: "addingStarted" }
+    | { type: "opened"; listener: ListenerRow }
+    /** A Listener whose import is queued but whose row isn't stored yet. */
+    | { type: "queuedOpened"; listenerId: ListenerId; username: string }
+    | { type: "removed"; listenerId: ListenerId; next: ListenerRow | undefined }
     | { type: "jobSettled"; job: Job; listener: ListenerRow | undefined }
     | { type: "listenerChanged"; listener: ListenerRow }
     | { type: "keySubmitted"; apiKey: string }
@@ -68,29 +78,46 @@ const unfinished = (job: Job): SetupProblem =>
 const refusesKey = ({ kind }: ProbeProblem): boolean =>
     kind === "InvalidKey" || kind === "Unavailable";
 
-/** Listeners whose import never finished, most recently viewed first. */
-const unfinishedImports = (listeners: readonly ListenerRow[]): ListenerRow[] =>
-    listeners
-        .filter((listener) => !listener.importComplete)
-        .toSorted((a, b) => b.lastViewedAt - a.lastViewedAt);
+const byRecentView = (listeners: readonly ListenerRow[]): ListenerRow[] =>
+    listeners.toSorted((a, b) => b.lastViewedAt - a.lastViewedAt);
 
-/** The dashboard of a finished Listener, else the import of an unfinished one, else setup. */
-const openingScreen = (
-    finished: ListenerRow | undefined,
-    resumable: ListenerRow | undefined,
-): Screen => {
-    if (finished) return { kind: "dashboard", listener: finished };
-    return resumable
-        ? { kind: "importing", listenerId: resumable.id, username: resumable.username }
-        : setupScreen({ kind: "editing" });
+/** A Listener's dashboard once their import has finished, their import's screen until then. */
+const screenOf = (listener: ListenerRow): Screen =>
+    listener.importComplete
+        ? { kind: "dashboard", listener }
+        : { kind: "importing", listenerId: listener.id, username: listener.username };
+
+/** The Listener a screen is showing, if any. */
+const listenerOn = (screen: Screen): ListenerId | undefined => {
+    if (screen.kind === "dashboard") return screen.listener.id;
+    return screen.kind === "importing" ? screen.listenerId : undefined;
 };
+
+/** Whether setup's form can be sent: it isn't already being checked. */
+const editable = (screen: Screen): boolean =>
+    screen.kind === "setup" && screen.status.kind !== "checking";
 
 const screenAfter = (screen: Screen, event: SessionEvent): Screen => {
     switch (event.type) {
         case "submitted":
-            return screen.kind === "setup" && screen.status.kind !== "checking"
-                ? setupScreen({ kind: "checking" })
+            return editable(screen) ? setupScreen({ kind: "checking" }) : screen;
+        case "taken":
+            return editable(screen)
+                ? setupScreen({
+                      kind: "rejected",
+                      problem: { kind: "ListenerTaken" },
+                      username: event.username,
+                  })
                 : screen;
+        case "addingStarted":
+            return screen.kind === "setup" ? screen : setupScreen({ kind: "editing" });
+        case "opened":
+            return screenOf(event.listener);
+        case "queuedOpened":
+            return { kind: "importing", listenerId: event.listenerId, username: event.username };
+        case "removed":
+            if (listenerOn(screen) !== event.listenerId) return screen;
+            return event.next ? screenOf(event.next) : setupScreen({ kind: "editing" });
         case "probed":
             if (screen.kind !== "setup" || screen.status.kind !== "checking") return screen;
             return event.result.ok
@@ -147,7 +174,7 @@ export function transition(state: SessionState, event: SessionEvent): SessionSta
     const apiKeyCheck = apiKeyCheckAfter(state.apiKeyCheck, event);
     return screen === state.screen && apiKeyCheck === state.apiKeyCheck
         ? state
-        : { screen, apiKeyCheck };
+        : { ...state, screen, apiKeyCheck };
 }
 
 export interface SessionDeps {
@@ -160,9 +187,11 @@ export interface SessionDeps {
     listeners: readonly ListenerRow[];
     /** The browser's timezone, offered for new Listeners. */
     defaultTimeZone: string;
+    /** The clock a Listener's last view is stamped with. */
+    now: () => number;
 }
 
-/** Which screen shows, moving from setup through the probe and import to the dashboard. */
+/** Which of the Listeners kept side by side is viewed, and which screen shows for them. */
 export function createSession({
     db,
     events,
@@ -171,13 +200,15 @@ export function createSession({
     settings,
     listeners,
     defaultTimeZone,
+    now,
 }: SessionDeps) {
     const initial = mostRecentlyViewed(listeners);
-    const resumable = unfinishedImports(listeners);
     const store: StoreApi<SessionState> = createStore<SessionState>(() => ({
-        screen: openingScreen(initial, resumable[0]),
+        screen: initial ? screenOf(initial) : setupScreen({ kind: "editing" }),
         apiKeyCheck: { kind: "idle" },
+        listeners: byRecentView(listeners),
     }));
+    const reads = { latest: 0 };
 
     /** Applies `event`, returning whether the session accepted it. */
     const dispatch = (event: SessionEvent): boolean => {
@@ -220,8 +251,63 @@ export function createSession({
         if (listener) timeline.show(listener);
     };
 
+    /** Points the timeline at the screen's Listener: their tables on a dashboard, none elsewhere. */
+    const followScreen = () => {
+        const { screen } = store.getState();
+        if (screen.kind === "dashboard") timeline.show(screen.listener);
+        else timeline.clear();
+    };
+
+    /** Reads the Listeners back from storage; only the latest read is kept. */
+    async function reload(): Promise<void> {
+        const read = ++reads.latest;
+        const stored = await db.listeners();
+        if (read === reads.latest) store.setState({ listeners: byRecentView(stored) });
+    }
+
+    const storedListener = (id: ListenerId) =>
+        store.getState().listeners.find((listener) => listener.id === id);
+
+    const unsettledJobOf = (id: ListenerId) =>
+        ingest.store.getState().queue.findLast((job) => job.listenerId === id && !isSettled(job));
+
+    /** A new Listener's import under way before their row is listed, other than `id`'s. */
+    const queuedImportBesides = (id?: ListenerId) =>
+        ingest.store
+            .getState()
+            .queue.findLast(
+                (job) =>
+                    job.kind === "import" &&
+                    job.listenerId !== id &&
+                    !isSettled(job) &&
+                    !storedListener(job.listenerId),
+            );
+
+    /** Whether `id` is already a Listener's: finished, or with an import or Sync under way. */
+    const isTaken = (id: ListenerId): boolean =>
+        storedListener(id)?.importComplete === true || unsettledJobOf(id) !== undefined;
+
+    /** Views a stored Listener, or one whose import is queued, remembering when they were viewed. */
+    async function open(id: ListenerId): Promise<void> {
+        // Read afresh: an import may have finished since the list was last read.
+        const stored = await db.listener(id);
+        if (!stored) {
+            const queued = unsettledJobOf(id);
+            if (!queued) return;
+            dispatch({ type: "queuedOpened", listenerId: id, username: queued.username });
+            followScreen();
+            return;
+        }
+        const listener = { ...stored, lastViewedAt: now() };
+        dispatch({ type: "opened", listener });
+        followScreen();
+        await db.updateListener(id, { lastViewedAt: listener.lastViewedAt });
+        await reload();
+    }
+
     events.on("jobSettled", async ({ job }) => {
         const listener = job.status === "done" ? await db.listener(job.listenerId) : undefined;
+        void reload();
         // A Sync's new tables are already being built from its `scrobblesChanged`.
         if (job.kind === "sync") {
             if (listener) dispatch({ type: "listenerChanged", listener });
@@ -230,22 +316,73 @@ export function createSession({
         if (dispatch({ type: "jobSettled", job, listener })) showCurrent();
     });
 
-    if (initial) timeline.show(initial);
-    resumable.forEach(resume);
+    if (initial?.importComplete) timeline.show(initial);
+    byRecentView(listeners)
+        .filter((listener) => !listener.importComplete)
+        .forEach(resume);
 
     return {
         store,
         /** The timezone the setup form starts on. */
         defaultTimeZone,
 
-        /** Probes the inputs, then saves the API key and queues the new Listener's import. */
-        async addListener({ username, apiKey, timeZone }: ImportRequest): Promise<void> {
+        /** Refuses a taken username, else probes it and queues the import, which runs in the background. */
+        async addListener({ username: typed, apiKey, timeZone }: ImportRequest): Promise<void> {
+            const id = listenerId(typed);
+            if (isTaken(id)) {
+                dispatch({ type: "taken", username: typed });
+                return;
+            }
+            // An unfinished Listener added again keeps the name they were first added under.
+            const known = storedListener(id);
+            const username = known?.username ?? typed;
             if (!dispatch({ type: "submitted" })) return;
             const result = await ingest.probe(username, apiKey);
             dispatch({ type: "probed", username, result });
             if (store.getState().screen.kind !== "importing") return;
             settings.update({ apiKey });
+            followScreen();
             void ingest.enqueueImport({ username, apiKey, timeZone });
+            if (known) {
+                await db.updateListener(id, { lastViewedAt: now() });
+                await reload();
+            }
+        },
+
+        open,
+
+        /** Shows setup to add another Listener. */
+        startAdding: (): void => void dispatch({ type: "addingStarted" }),
+
+        /** Leaves setup for the Listener viewed most recently. */
+        async cancelAdding(): Promise<void> {
+            const previous =
+                mostRecentlyViewed(store.getState().listeners)?.id ??
+                queuedImportBesides()?.listenerId;
+            if (previous) await open(previous);
+        },
+
+        /** How many Scrobbles are stored for a Listener, for the removal prompt. */
+        scrobbleCount: (id: ListenerId): Promise<number> => db.countScrobblesOf(id),
+
+        /** Removes a Listener's jobs and Scrobbles; if in view, opens the next most recently viewed. */
+        async removeListener(id: ListenerId): Promise<void> {
+            const next = mostRecentlyViewed(
+                store.getState().listeners.filter((listener) => listener.id !== id),
+            );
+            const queued = next ? undefined : queuedImportBesides(id);
+            // The screen moves on first, so the cancelled import doesn't show as a setup problem.
+            if (dispatch({ type: "removed", listenerId: id, next })) {
+                if (queued)
+                    dispatch({
+                        type: "queuedOpened",
+                        listenerId: queued.listenerId,
+                        username: queued.username,
+                    });
+                followScreen();
+            }
+            await ingest.removeListener(id);
+            await reload();
         },
 
         resumeImport,
@@ -278,6 +415,7 @@ export function createSession({
             await db.updateListener(listener.id, { timeZone });
             if (dispatch({ type: "listenerChanged", listener: { ...listener, timeZone } }))
                 showCurrent();
+            await reload();
         },
     };
 }

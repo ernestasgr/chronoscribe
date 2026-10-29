@@ -145,11 +145,9 @@ function openDexie(name: string): ChronoscribeDexie {
     return dexie;
 }
 
-/** The most recently viewed Listener whose import has finished. */
+/** The most recently viewed Listener, finished or not. */
 export const mostRecentlyViewed = (listeners: readonly ListenerRow[]): ListenerRow | undefined =>
-    listeners
-        .filter((listener) => listener.importComplete)
-        .toSorted((a, b) => b.lastViewedAt - a.lastViewedAt)[0];
+    listeners.toSorted((a, b) => b.lastViewedAt - a.lastViewedAt)[0];
 
 /** The app's storage. Every read and write of IndexedDB goes through here. */
 export function openDb(name = "chronoscribe") {
@@ -220,6 +218,14 @@ export function openDb(name = "chronoscribe") {
 
         async deleteScrobblesOf(id: ListenerId): Promise<void> {
             await scrobblesOf(id).delete();
+        },
+
+        /** Deletes a Listener's Scrobbles and their row in one transaction. */
+        async deleteListener(id: ListenerId): Promise<void> {
+            await dexie.transaction("rw", dexie.scrobbles, dexie.listeners, async () => {
+                await scrobblesOf(id).delete();
+                await dexie.listeners.delete(id);
+            });
         },
 
         /** The second of a Listener's oldest stored Scrobble, if they have any. */

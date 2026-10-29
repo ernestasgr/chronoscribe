@@ -21,11 +21,30 @@ const bristol: FixtureUser = {
     history: scrobbles("Massive Attack", 10, "2026-07-01T02:00:00Z"),
 };
 const hidden: FixtureUser = { username: "Hidden", history: [], hidden: true };
+const bath: FixtureUser = {
+    username: "Bath",
+    history: scrobbles("Goldfrapp", 6, "2026-07-05T08:00:00Z"),
+};
+const avon: FixtureUser = {
+    username: "Avon",
+    history: scrobbles("Roni Size", 3, "2026-07-06T08:00:00Z"),
+};
+const BATH = listenerId("Bath");
+const AVON = listenerId("Avon");
 
 /** A session over real storage and services, with last.fm faked and builds run in-process. */
 async function setUp(
     db: Db,
-    { apiKey, network }: { apiKey?: string; network?: { offline: boolean } } = {},
+    {
+        apiKey,
+        network,
+        holds = () => false,
+    }: {
+        apiKey?: string;
+        network?: { offline: boolean };
+        /** Which requests get no answer until they are aborted. */
+        holds?: (url: URL) => boolean;
+    } = {},
 ) {
     const requests: URL[] = [];
     const events = createEventBus<IngestEvents>();
@@ -37,11 +56,19 @@ async function setUp(
         transport: {
             now: () => NOW,
             sleep: async () => {},
-            fetch: async (input) => {
+            fetch: async (input, init) => {
                 if (network?.offline) throw new TypeError("Failed to fetch");
                 const url = new URL(input);
                 requests.push(url);
-                const { status, body } = respondRecentTracks(url, [bristol, hidden], API_KEY);
+                if (holds(url))
+                    return new Promise((_, reject) =>
+                        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason)),
+                    );
+                const { status, body } = respondRecentTracks(
+                    url,
+                    [bristol, bath, avon, hidden],
+                    API_KEY,
+                );
                 return new Response(JSON.stringify(body), { status });
             },
         },
@@ -57,6 +84,8 @@ async function setUp(
         requestFrame: () => () => {},
         playback: () => settings.store.getState(),
     });
+    // Each look at the clock is a millisecond later, so views are ordered.
+    let clock = NOW;
     const session = createSession({
         db,
         events,
@@ -65,6 +94,7 @@ async function setUp(
         settings,
         listeners: await db.listeners(),
         defaultTimeZone: "UTC",
+        now: () => ++clock,
     });
     const firstDay = () => timeline.store.getState().tables?.firstDay;
     return { requests, settings, ingest, timeline, session, firstDay };
@@ -242,6 +272,235 @@ describe("Settings", () => {
     });
 });
 
+/** Stores `user`'s whole history, or only their newest Scrobble if their import is unfinished. */
+async function seed(
+    db: Db,
+    user: FixtureUser,
+    { complete, lastViewedAt }: { complete: boolean; lastViewedAt: number },
+) {
+    const id = listenerId(user.username);
+    await db.putListener({
+        id,
+        username: user.username,
+        timeZone: "UTC",
+        pinnedArtists: [],
+        importTo: unixSecondsAt(NOW),
+        syncedAt: unixSecondsAt(NOW),
+        importComplete: false,
+        pageSize: 1000,
+        lastViewedAt,
+    });
+    const rows = complete ? user.history : user.history.slice(-1);
+    await db.addPage(
+        id,
+        rows.map((scrobble) => ({ ...scrobble, listenerId: id, uts: unixSeconds(scrobble.uts) })),
+        { last: complete },
+    );
+}
+
+type TestSession = Awaited<ReturnType<typeof setUp>>["session"];
+
+/** What the session shows, in a word and a Listener. */
+const viewing = (session: TestSession) => {
+    const { screen } = session.store.getState();
+    if (screen.kind === "dashboard") return `dashboard ${screen.listener.id}`;
+    return screen.kind === "importing" ? `importing ${screen.listenerId}` : "setup";
+};
+
+const listedIds = (session: TestSession) =>
+    session.store.getState().listeners.map((listener) => listener.id);
+
+/** A request for a page of Bath's history, rather than the probe's one Scrobble. */
+const isBathPage = (url: URL) =>
+    url.searchParams.get("user") === "Bath" && url.searchParams.get("limit") !== "1";
+
+describe("several Listeners", () => {
+    let db: Db;
+    beforeEach(() => {
+        db = openDb(`session-${crypto.randomUUID()}`);
+    });
+
+    test("boot opens the most recently viewed Listener and resumes every unfinished import", async () => {
+        await seed(db, bristol, { complete: true, lastViewedAt: NOW - 1000 });
+        await seed(db, bath, { complete: false, lastViewedAt: NOW - 2000 });
+        await seed(db, avon, { complete: false, lastViewedAt: NOW - 3000 });
+
+        const { session, ingest, firstDay } = await setUp(db, { apiKey: API_KEY });
+
+        expect(viewing(session)).toBe("dashboard bristol");
+        await expect.poll(firstDay).toEqual({ date: "2026-07-01", timeZone: "UTC" });
+        expect(ingest.store.getState().queue.map((job) => job.listenerId)).toEqual([BATH, AVON]);
+        await expect.poll(async () => (await db.listener(AVON))?.importComplete).toBe(true);
+        expect(await db.countScrobblesOf(BATH)).toBe(6);
+        expect(viewing(session)).toBe("dashboard bristol");
+    });
+
+    test("boot opens an unfinished Listener's import when they were viewed last", async () => {
+        await seed(db, bristol, { complete: true, lastViewedAt: NOW - 2000 });
+        await seed(db, bath, { complete: false, lastViewedAt: NOW - 1000 });
+
+        const { session } = await setUp(db, { apiKey: API_KEY });
+
+        expect(viewing(session)).toBe("importing bath");
+        await expect.poll(() => viewing(session)).toBe("dashboard bath");
+    });
+
+    test("lists every Listener, most recently viewed first", async () => {
+        await seed(db, bristol, { complete: true, lastViewedAt: NOW - 2000 });
+        await seed(db, bath, { complete: true, lastViewedAt: NOW - 1000 });
+
+        const { session } = await setUp(db, { apiKey: API_KEY });
+
+        expect(listedIds(session)).toEqual([BATH, BRISTOL]);
+    });
+
+    test("switching Listeners rebuilds the tables, resets the Focus Day and window, and is remembered", async () => {
+        await seed(db, bristol, { complete: true, lastViewedAt: NOW - 1000 });
+        await seed(db, bath, { complete: true, lastViewedAt: NOW - 2000 });
+        const { session, timeline, firstDay } = await setUp(db, { apiKey: API_KEY });
+        await expect.poll(firstDay).toEqual({ date: "2026-07-01", timeZone: "UTC" });
+        timeline.seek(1, { glide: false });
+        timeline.setWindow({ start: 1, end: 2 });
+
+        await session.open(BATH);
+
+        expect(viewing(session)).toBe("dashboard bath");
+        await expect.poll(firstDay).toEqual({ date: "2026-07-05", timeZone: "UTC" });
+        // 5 to 10 July: six Days, the last in focus and all in view.
+        expect(timeline.getView()).toEqual({ playhead: 5, window: { start: 0, end: 5 } });
+        expect(listedIds(session)).toEqual([BATH, BRISTOL]);
+        const reopened = await setUp(db, { apiKey: API_KEY });
+        expect(viewing(reopened.session)).toBe("dashboard bath");
+    });
+
+    test("a new Listener imports in the background while another is viewed", async () => {
+        await seed(db, bristol, { complete: true, lastViewedAt: NOW - 1000 });
+        const { session, timeline } = await setUp(db, { apiKey: API_KEY });
+
+        session.startAdding();
+        expect(viewing(session)).toBe("setup");
+        await session.addListener({ username: "Bath", apiKey: API_KEY, timeZone: "UTC" });
+        expect(viewing(session)).toBe("importing bath");
+        expect(timeline.store.getState().tables).toBeUndefined();
+        await session.open(BRISTOL);
+
+        await expect.poll(async () => (await db.listener(BATH))?.importComplete).toBe(true);
+        await expect.poll(() => listedIds(session)).toEqual([BRISTOL, BATH]);
+        expect(viewing(session)).toBe("dashboard bristol");
+    });
+
+    test("leaving setup goes back to the Listener viewed last", async () => {
+        await seed(db, bristol, { complete: true, lastViewedAt: NOW - 1000 });
+        const { session } = await setUp(db, { apiKey: API_KEY });
+
+        session.startAdding();
+        await session.cancelAdding();
+
+        expect(viewing(session)).toBe("dashboard bristol");
+    });
+
+    test.each(["Bristol", "BRISTOL", "bristol"])(
+        "a username already added is refused as %s, before any request",
+        async (username) => {
+            await seed(db, bristol, { complete: true, lastViewedAt: NOW - 1000 });
+            const { session, requests } = await setUp(db, { apiKey: API_KEY });
+            session.startAdding();
+
+            await session.addListener({ username, apiKey: API_KEY, timeZone: "UTC" });
+
+            expect(session.store.getState().screen).toEqual({
+                kind: "setup",
+                status: { kind: "rejected", problem: { kind: "ListenerTaken" }, username },
+            });
+            expect(requests).toEqual([]);
+            expect(await db.countScrobblesOf(BRISTOL)).toBe(10);
+        },
+    );
+
+    test("removing the current Listener deletes them and opens the one viewed most recently after", async () => {
+        await seed(db, bristol, { complete: true, lastViewedAt: NOW - 1000 });
+        await seed(db, bath, { complete: true, lastViewedAt: NOW - 3000 });
+        await seed(db, avon, { complete: true, lastViewedAt: NOW - 2000 });
+        const { session, firstDay } = await setUp(db, { apiKey: API_KEY });
+        expect(await session.scrobbleCount(BRISTOL)).toBe(10);
+
+        await session.removeListener(BRISTOL);
+
+        expect(viewing(session)).toBe("dashboard avon");
+        await expect.poll(firstDay).toEqual({ date: "2026-07-06", timeZone: "UTC" });
+        expect(await db.listener(BRISTOL)).toBeUndefined();
+        expect(await db.countScrobblesOf(BRISTOL)).toBe(0);
+        expect(listedIds(session)).toEqual([AVON, BATH]);
+    });
+
+    test("removing a Listener mid-import cancels it and leaves the current one in view", async () => {
+        await seed(db, bristol, { complete: true, lastViewedAt: NOW - 1000 });
+        const { session, ingest } = await setUp(db, { apiKey: API_KEY, holds: isBathPage });
+        session.startAdding();
+        await session.addListener({ username: "Bath", apiKey: API_KEY, timeZone: "UTC" });
+        await session.open(BRISTOL);
+        await expect.poll(() => ingest.store.getState().queue.at(-1)?.status).toBe("running");
+
+        await session.removeListener(BATH);
+
+        expect(viewing(session)).toBe("dashboard bristol");
+        expect(ingest.store.getState().queue.at(-1)).toMatchObject({
+            listenerId: BATH,
+            status: "cancelled",
+        });
+        expect(await db.listener(BATH)).toBeUndefined();
+        expect(await db.countScrobblesOf(BATH)).toBe(0);
+        expect(listedIds(session)).toEqual([BRISTOL]);
+    });
+
+    test("removing the only finished Listener opens one still importing, not setup", async () => {
+        await seed(db, bristol, { complete: true, lastViewedAt: NOW - 1000 });
+        const { session } = await setUp(db, { apiKey: API_KEY, holds: isBathPage });
+        session.startAdding();
+        await session.addListener({ username: "Bath", apiKey: API_KEY, timeZone: "UTC" });
+        await session.open(BRISTOL);
+
+        await session.removeListener(BRISTOL);
+
+        expect(viewing(session)).toBe("importing bath");
+        session.startAdding();
+        await session.cancelAdding();
+        expect(viewing(session)).toBe("importing bath");
+    });
+
+    test("re-adding an unfinished Listener in another case resumes them under their own name", async () => {
+        await seed(db, bristol, { complete: true, lastViewedAt: NOW - 1000 });
+        await seed(db, bath, { complete: false, lastViewedAt: NOW - 2000 });
+        const { session, ingest } = await setUp(db, { apiKey: "wrong-key" });
+        await expect.poll(() => ingest.store.getState().queue.at(-1)?.status).toBe("paused");
+        session.startAdding();
+
+        await session.addListener({ username: "BATH", apiKey: API_KEY, timeZone: "UTC" });
+
+        expect(session.store.getState().screen).toEqual({
+            kind: "importing",
+            listenerId: BATH,
+            username: "Bath",
+        });
+        await expect.poll(() => viewing(session)).toBe("dashboard bath");
+        expect(listedIds(session)[0]).toBe(BATH);
+    });
+
+    test("removing the last Listener shows setup", async () => {
+        await seed(db, bristol, { complete: true, lastViewedAt: NOW - 1000 });
+        const { session, timeline } = await setUp(db, { apiKey: API_KEY });
+
+        await session.removeListener(BRISTOL);
+
+        expect(session.store.getState().screen).toEqual({
+            kind: "setup",
+            status: { kind: "editing" },
+        });
+        expect(timeline.store.getState().tables).toBeUndefined();
+        expect(await db.listeners()).toEqual([]);
+    });
+});
+
 /** Bristol's Import job, settled with `outcome`. */
 const job = (outcome: Outcome): Job => ({
     id: 1,
@@ -268,10 +527,12 @@ describe("the session's transitions", () => {
     const importing: SessionState = {
         screen: { kind: "importing", listenerId: BRISTOL, username: "Bristol" },
         apiKeyCheck: { kind: "idle" },
+        listeners: [],
     };
     const dashboard: SessionState = {
         screen: { kind: "dashboard", listener: bristolRow },
         apiKeyCheck: { kind: "idle" },
+        listeners: [bristolRow],
     };
 
     test("a paused import stays behind the import screen", () => {

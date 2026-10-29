@@ -49,6 +49,10 @@ const PROBLEMS: {
     },
     ImportFailed: { field: "form", message: ({ message }) => message },
     ImportCancelled: { field: "form", message: () => "Import cancelled" },
+    ListenerTaken: {
+        field: "username",
+        message: (_, username) => `${username} is already a Listener`,
+    },
 };
 
 /** The form field `problem` belongs under. */

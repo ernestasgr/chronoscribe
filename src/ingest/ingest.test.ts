@@ -437,6 +437,136 @@ describe("the Import job", () => {
     });
 });
 
+/** Whose history each run of requests was for, in order. */
+const usersAsked = (requests: readonly { url: URL }[]) =>
+    requests
+        .map(({ url }) => url.searchParams.get("user"))
+        .filter((user, index, users) => user !== users[index - 1]);
+
+const isBristolPageTwo = (url: URL) =>
+    url.searchParams.get("user") === "Bristol" && url.searchParams.get("page") === "2";
+
+describe("several Listeners", () => {
+    let db: Db;
+    const bristol: FixtureUser = {
+        username: "Bristol",
+        history: scrobbles("Massive Attack", 2100, "2026-07-01T08:00:00Z"),
+    };
+    const bath: FixtureUser = {
+        username: "Bath",
+        history: scrobbles("Goldfrapp", 1500, "2026-07-02T08:00:00Z"),
+    };
+    const avon: FixtureUser = {
+        username: "Avon",
+        history: scrobbles("Roni Size", 300, "2026-07-03T08:00:00Z"),
+    };
+    const BATH = listenerId("Bath");
+
+    /** last.fm over every fixture user; a request `hangs` picks waits for an abort; `hung` resolves once one is in flight. */
+    function setUp(hangs: (url: URL) => boolean = () => false) {
+        const fake = fakeTransport([bristol, bath, avon]);
+        const inFlight = { now: 0, most: 0 };
+        const onHung: (() => void)[] = [];
+        const hung = new Promise<void>((resolve) => onHung.push(resolve));
+        const aborted: URL[] = [];
+        const fetch = async (input: string | URL | Request, init?: RequestInit) => {
+            const url = new URL(String(input));
+            inFlight.now++;
+            inFlight.most = Math.max(inFlight.most, inFlight.now);
+            try {
+                if (!hangs(url)) return await fake.transport.fetch(input, init);
+                onHung.forEach((resolve) => resolve());
+                return await new Promise<Response>((_, reject) =>
+                    init?.signal?.addEventListener("abort", () => {
+                        aborted.push(url);
+                        reject(init.signal?.reason);
+                    }),
+                );
+            } finally {
+                inFlight.now--;
+            }
+        };
+        const events = createEventBus<IngestEvents>();
+        const settled: string[] = [];
+        events.on("jobSettled", ({ job }) => settled.push(`${job.username} ${job.status}`));
+        const ingest = createIngest({ db, events, transport: { ...fake.transport, fetch } });
+        return { ...fake, ingest, inFlight, hung, aborted, settled };
+    }
+
+    beforeEach(() => {
+        db = openDb(`ingest-${crypto.randomUUID()}`);
+    });
+
+    test("one app-wide queue fetches for one Listener at a time, in the order queued", async () => {
+        const { ingest, requests, inFlight, settled } = setUp();
+        await ingest.enqueueImport(request("Avon"));
+
+        const jobs = await Promise.all([
+            ingest.enqueueImport(request("Bristol")),
+            ingest.enqueueSync({ username: "Avon", apiKey: API_KEY }),
+            ingest.enqueueImport(request("Bath")),
+        ]);
+
+        expect(jobs.map((job) => `${job.kind} ${job.username} ${job.status}`)).toEqual([
+            "import Bristol done",
+            "sync Avon done",
+            "import Bath done",
+        ]);
+        expect(usersAsked(requests)).toEqual(["Avon", "Bristol", "Avon", "Bath"]);
+        expect(settled).toEqual(["Avon done", "Bristol done", "Avon done", "Bath done"]);
+        expect(inFlight.most).toBe(1);
+    });
+
+    test("a queued job cancelled before its turn settles at once, and the queue moves on", async () => {
+        const { ingest, requests, settled } = setUp();
+        const bristolJob = ingest.enqueueImport(request("Bristol"));
+        const bathJob = ingest.enqueueImport(request("Bath"));
+        const avonJob = ingest.enqueueImport(request("Avon"));
+
+        ingest.cancel(BATH);
+
+        expect((await bathJob).status).toBe("cancelled");
+        expect(settled).toEqual(["Bath cancelled"]);
+        expect((await bristolJob).status).toBe("done");
+        expect((await avonJob).status).toBe("done");
+        expect(usersAsked(requests)).toEqual(["Bristol", "Avon"]);
+        expect(await db.listener(BATH)).toBeUndefined();
+    });
+
+    test("removing a Listener mid-fetch aborts it, then deletes their Scrobbles and row", async () => {
+        const { ingest, hung, aborted } = setUp(isBristolPageTwo);
+        const bristolJob = ingest.enqueueImport(request("Bristol"));
+        const bathJob = ingest.enqueueImport(request("Bath"));
+        await hung;
+        expect(await db.countScrobblesOf(BRISTOL)).toBe(1000);
+
+        await ingest.removeListener(BRISTOL);
+
+        expect(aborted.map((url) => url.searchParams.get("page"))).toEqual(["2"]);
+        expect((await bristolJob).status).toBe("cancelled");
+        expect(await db.listener(BRISTOL)).toBeUndefined();
+        expect(await db.countScrobblesOf(BRISTOL)).toBe(0);
+        expect((await bathJob).status).toBe("done");
+        expect(await db.countScrobblesOf(BATH)).toBe(1500);
+        expect(await db.countScrobblesOf(BRISTOL)).toBe(0);
+    });
+
+    test("removing a queued Listener doesn't wait for the running job", async () => {
+        const { ingest, hung, settled } = setUp(
+            (url) => url.searchParams.get("user") === "Bristol",
+        );
+        const bristolJob = ingest.enqueueImport(request("Bristol"));
+        void ingest.enqueueImport(request("Bath"));
+        await hung;
+
+        await ingest.removeListener(BATH);
+
+        expect(settled).toEqual(["Bath cancelled"]);
+        ingest.cancel(BRISTOL);
+        expect((await bristolJob).status).toBe("cancelled");
+    });
+});
+
 describe("the Sync job", () => {
     let db: Db;
     const DAY_MS = 86_400_000;
