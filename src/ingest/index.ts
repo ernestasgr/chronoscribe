@@ -1,13 +1,18 @@
 import { createStore, type StoreApi } from "zustand";
-import { listenerId, type Db } from "../db";
+import { listenerId, PAGE_SIZES, type Db, type ListenerRow, type PageSize } from "../db";
 import type { Emitter } from "../events";
 import { getRecentTracks, type Fetch, type LastfmFailure } from "../lastfm";
 
-const PAGE_LIMIT = 1000;
 /** At most 4 last.fm requests per second, app-wide. */
 const MIN_REQUEST_GAP_MS = 250;
+/** The page size an import falls back to when last.fm won't serve 1000. */
+const SMALL_PAGE = PAGE_SIZES[1];
 /** How many recent page times the ETA averages. */
 const ETA_WINDOW = 5;
+/** How many times in a row one request may fail transiently before the import pauses. */
+export const MAX_FAILURES = 5;
+/** The wait before the first retry, doubling with each failure after it. */
+const FIRST_BACKOFF_MS = 1000;
 
 export interface Transport {
     fetch: Fetch;
@@ -21,7 +26,8 @@ export const browserTransport: Transport = {
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 };
 
-export type JobStatus = "queued" | "running" | "done" | "failed" | "cancelled";
+/** `paused` keeps what was fetched and waits for the user to resume; `failed` is a bug. */
+export type JobStatus = "queued" | "running" | "paused" | "done" | "failed" | "cancelled";
 
 export interface JobProgress {
     fetched: number;
@@ -37,7 +43,17 @@ export interface Job {
     progress?: JobProgress;
     /** Milliseconds left, from a moving average of recent page times. */
     etaMs?: number;
+    /** The wait before retrying a request that failed transiently, while there is one. */
+    retry?: Retry;
     error?: LastfmFailure;
+}
+
+/** Transient failures being waited out: `failures` in a row, pausing at `pausesAt`, retrying in `inMs`. */
+export interface Retry {
+    failures: number;
+    pausesAt: number;
+    inMs: number;
+    error: LastfmFailure;
 }
 
 export interface IngestState {
@@ -47,7 +63,7 @@ export interface IngestState {
 export interface IngestEvents {
     /** Ingest has committed a change to a Listener's Scrobbles. */
     scrobblesChanged: { listenerId: string };
-    /** A job has finished, failed or been cancelled. */
+    /** A job has finished, paused, failed or been cancelled. */
     jobSettled: { job: Job };
 }
 
@@ -75,11 +91,13 @@ const PROBE_PROBLEMS: Readonly<Record<number, ProbeProblem>> = {
     26: { kind: "InvalidKey" },
 };
 
-const probeProblem = ({ code, message }: LastfmFailure): ProbeProblem =>
+/** What a last.fm failure means for the Listener and key it was asked with. */
+export const problemOf = ({ code, message }: LastfmFailure): ProbeProblem =>
     (code === undefined ? undefined : PROBE_PROBLEMS[code]) ?? { kind: "Unavailable", message };
 
+/** Whether a job has stopped running; a paused import resumes as a new job. */
 export const isSettled = ({ status }: Job): boolean =>
-    status === "done" || status === "failed" || status === "cancelled";
+    status === "done" || status === "paused" || status === "failed" || status === "cancelled";
 
 const average = (values: readonly number[]) =>
     values.reduce((sum, value) => sum + value, 0) / Math.max(values.length, 1);
@@ -87,6 +105,24 @@ const average = (values: readonly number[]) =>
 /** The ETA after a page: the mean of the last few page times, once per page still to fetch. */
 export const etaMs = (pageTimes: readonly number[], pagesLeft: number): number =>
     Math.round(average(pageTimes.slice(-ETA_WINDOW)) * Math.max(pagesLeft, 0));
+
+/** Where the next request reads from: page `page` of `pageSize` below `to`, with `fetched` stored. */
+interface Cursor {
+    to: number;
+    page: number;
+    pageSize: PageSize;
+    fetched: number;
+}
+
+/** The wait before retrying after `failures` transient failures in a row: 1 s, 2 s, 4 s, … */
+export const backoffMs = (failures: number): number => FIRST_BACKOFF_MS * 2 ** (failures - 1);
+
+/** The outcome of an import that stopped on `error`, keeping everything it stored. */
+const paused = (error: LastfmFailure): Partial<Job> => ({
+    status: "paused",
+    error,
+    retry: undefined,
+});
 
 const withJob = (queue: readonly Job[], id: number, changes: Partial<Job>): Job[] =>
     queue.map((job) => (job.id === id ? { ...job, ...changes } : job));
@@ -118,64 +154,152 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
     const controllers = new Map<number, AbortController>();
     const runs = { tail: Promise.resolve(), nextId: 1 };
 
+    /** Waits `ms`, or less if `signal` aborts first. */
+    const sleepUnlessAborted = (ms: number, signal: AbortSignal) =>
+        new Promise<void>((resolve) => {
+            signal.addEventListener("abort", () => resolve(), { once: true });
+            void transport.sleep(ms).then(resolve);
+        });
+    /** Each Listener's import that hasn't settled, which a new request for them joins. */
+    const unsettled = new Map<string, Promise<Job>>();
+
     const patch = (id: number, changes: Partial<Job>) =>
         store.setState(({ queue }) => ({ queue: withJob(queue, id, changes) }));
     const jobOf = (id: number) => store.getState().queue.find((job) => job.id === id)!;
 
-    /**
-     * Adds a Listener and imports their whole Scrobble history, newest first, up to a `to`
-     * fixed when the job starts. Resolves to the job's outcome; never rejects.
-     */
+    /** The Listener's row to import into: their unfinished one to resume, or a fresh one. */
+    async function importRow({ username, timeZone }: ImportRequest): Promise<ListenerRow> {
+        const id = listenerId(username);
+        const existing = await db.listener(id);
+        const lastViewedAt = transport.now();
+        const resuming = existing !== undefined && !existing.importComplete;
+        const row: ListenerRow = resuming
+            ? { ...existing, timeZone, lastViewedAt }
+            : {
+                  id,
+                  username,
+                  timeZone,
+                  pinnedArtists: existing?.pinnedArtists ?? [],
+                  importTo: Math.floor(lastViewedAt / 1000),
+                  importComplete: false,
+                  pageSize: existing?.pageSize ?? PAGE_SIZES[0],
+                  lastViewedAt,
+              };
+        // A finished history is imported again from nothing.
+        if (!resuming) await db.deleteScrobblesOf(id);
+        await db.putListener(row);
+        return row;
+    }
+
+    /** Where paging picks up: the oldest stored second may be partial, so it is dropped and fetched again. */
+    async function resumeFrom(row: ListenerRow, pageSize: PageSize): Promise<Cursor> {
+        const oldest = await db.oldestUtsOf(row.id);
+        if (oldest !== undefined) await db.deleteScrobblesAt(row.id, oldest);
+        return {
+            to: oldest === undefined ? row.importTo : oldest + 1,
+            page: 1,
+            pageSize,
+            fetched: await db.countScrobblesOf(row.id),
+        };
+    }
+
+    /** Drops to pages of 200 for this run and the Listener's later ones, picking up below what is stored. */
+    async function smallerPages(row: ListenerRow): Promise<Cursor> {
+        await db.updateListener(row.id, { pageSize: SMALL_PAGE });
+        return resumeFrom(row, SMALL_PAGE);
+    }
+
+    /** Imports a Listener's history newest first below a fixed `to`, resuming an unfinished one; never rejects. */
     async function runImport(
         id: number,
-        { username, apiKey, timeZone }: ImportRequest,
+        request: ImportRequest,
         signal: AbortSignal,
     ): Promise<Partial<Job>> {
-        const listener = listenerId(username);
-        const importTo = Math.floor(transport.now() / 1000);
-        // Until imports can resume, a restarted import begins again from nothing.
-        await db.deleteScrobblesOf(listener);
-        await db.putListener({
-            id: listener,
-            username,
-            timeZone,
-            pinnedArtists: [],
-            importTo,
-            importComplete: false,
-            lastViewedAt: transport.now(),
-        });
+        const row = await importRow(request);
+        let cursor = await resumeFrom(row, row.pageSize);
+        let pageTimes: number[] = [];
+        let total: number | undefined;
+        let failures = 0;
 
-        const pageTimes: number[] = [];
-        for (let page = 1; ; page++) {
+        const report = () => {
+            if (total === undefined) return;
+            const pagesLeft = Math.ceil((total - cursor.fetched) / cursor.pageSize);
+            patch(id, {
+                progress: { fetched: cursor.fetched, total },
+                etaMs: etaMs(pageTimes, pagesLeft),
+                retry: undefined,
+            });
+        };
+        // Pages of 200 are a new request, timed and counted afresh.
+        const switchToSmallPages = async () => {
+            cursor = await smallerPages(row);
+            pageTimes = [];
+            failures = 0;
+            report();
+        };
+
+        for (;;) {
             const startedAt = transport.now();
             await throttle();
             if (signal.aborted) return { status: "cancelled" };
             const result = await getRecentTracks(
-                { user: username, apiKey, page, limit: PAGE_LIMIT, to: importTo, signal },
+                {
+                    user: row.username,
+                    apiKey: request.apiKey,
+                    page: cursor.page,
+                    limit: cursor.pageSize,
+                    to: cursor.to,
+                    signal,
+                },
                 transport.fetch,
             );
-            if (!result.ok)
-                return result.error.kind === "Aborted"
-                    ? { status: "cancelled" }
-                    : { status: "failed", error: result.error };
+            if (!result.ok) {
+                const { error } = result;
+                if (error.kind === "Aborted") return { status: "cancelled" };
+                if (error.kind === "Hard") return paused(error);
+                failures++;
+                if (failures >= MAX_FAILURES) return paused(error);
+                const inMs = backoffMs(failures);
+                patch(id, { retry: { failures, pausesAt: MAX_FAILURES, inMs, error } });
+                await sleepUnlessAborted(inMs, signal);
+                if (cursor.pageSize !== SMALL_PAGE) await switchToSmallPages();
+                continue;
+            }
+            failures = 0;
+            // A page cut short would leave a gap below it, so it is fetched again in 200s.
+            if (cursor.pageSize !== SMALL_PAGE && result.value.perPage < cursor.pageSize) {
+                await switchToSmallPages();
+                continue;
+            }
 
-            const { scrobbles, total, totalPages } = result.value;
-            await db.addScrobbles(
-                scrobbles.map((scrobble) => ({ listenerId: listener, ...scrobble })),
+            const { scrobbles, totalPages } = result.value;
+            // The run's first page counts what is left below its `to`; later pages could drift.
+            total ??= cursor.fetched + result.value.total;
+            const last = scrobbles.length === 0 || cursor.page >= totalPages;
+            await db.addPage(
+                row.id,
+                scrobbles.map((scrobble) => ({ listenerId: row.id, ...scrobble })),
+                { last },
             );
             pageTimes.push(transport.now() - startedAt);
-            const fetched = (jobOf(id).progress?.fetched ?? 0) + scrobbles.length;
-            patch(id, { progress: { fetched, total }, etaMs: etaMs(pageTimes, totalPages - page) });
-            if (scrobbles.length === 0 || page >= totalPages) break;
+            cursor = {
+                ...cursor,
+                page: cursor.page + 1,
+                fetched: cursor.fetched + scrobbles.length,
+            };
+            report();
+            if (last) break;
         }
-        await db.updateListener(listener, { importComplete: true });
         // One event for the whole import: its history is only shown once it is complete.
-        events.emit("scrobblesChanged", { listenerId: listener });
+        events.emit("scrobblesChanged", { listenerId: row.id });
         return { status: "done", etaMs: 0 };
     }
 
-    /** Queues an Import job; resolves to the job once it has settled. */
+    /** Queues an Import job, or joins the Listener's unsettled one; resolves to it once settled. */
     function enqueueImport(request: ImportRequest): Promise<Job> {
+        const listener = listenerId(request.username);
+        const joined = unsettled.get(listener);
+        if (joined) return joined;
         const id = runs.nextId++;
         const controller = new AbortController();
         controllers.set(id, controller);
@@ -185,7 +309,7 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
                 {
                     id,
                     kind: "import",
-                    listenerId: listenerId(request.username),
+                    listenerId: listener,
                     username: request.username,
                     status: "queued",
                 },
@@ -193,11 +317,14 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
         }));
 
         runs.tail = runs.tail.then(() => run(id, request, controller.signal));
-        return runs.tail.then(() => {
+        const settled = runs.tail.then(() => {
             controllers.delete(id);
+            unsettled.delete(listener);
             events.emit("jobSettled", { job: jobOf(id) });
             return jobOf(id);
         });
+        unsettled.set(listener, settled);
+        return settled;
     }
 
     async function run(id: number, request: ImportRequest, signal: AbortSignal): Promise<void> {
@@ -227,7 +354,7 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
             { user: username, apiKey, page: 1, limit: 1 },
             transport.fetch,
         );
-        return result.ok ? { ok: true } : { ok: false, problem: probeProblem(result.error) };
+        return result.ok ? { ok: true } : { ok: false, problem: problemOf(result.error) };
     }
 
     return { store, enqueueImport, cancel, probe };

@@ -10,18 +10,32 @@ export interface ScrobbleRow {
     album: string;
 }
 
-export interface ListenerRow {
+/** The page sizes an import asks last.fm for, largest first. */
+export const PAGE_SIZES = [1000, 200] as const;
+export type PageSize = (typeof PAGE_SIZES)[number];
+
+/** A stored Listener row; one from before page sizes were remembered asks for 1000. */
+const ListenerRowSchema = z.object({
     /** The lowercased last.fm username. */
-    id: string;
-    username: string;
+    id: z.string(),
+    username: z.string(),
     /** IANA timezone the Listener's Days are counted in. */
-    timeZone: string;
-    pinnedArtists: string[];
+    timeZone: z.string(),
+    pinnedArtists: z.array(z.string()),
     /** The fixed, exclusive `to` the import pages up to, in Unix seconds. */
-    importTo: number;
-    importComplete: boolean;
-    lastViewedAt: number;
-}
+    importTo: z.number(),
+    importComplete: z.boolean(),
+    /** How many Scrobbles each import request asks for: 200 once last.fm has refused 1000. */
+    pageSize: z.literal(PAGE_SIZES).catch(PAGE_SIZES[0]),
+    lastViewedAt: z.number(),
+});
+
+export type ListenerRow = z.infer<typeof ListenerRowSchema>;
+
+const parseListener = (row: unknown): ListenerRow | undefined => {
+    const parsed = ListenerRowSchema.safeParse(row);
+    return parsed.success ? parsed.data : undefined;
+};
 
 /** fold long tail / within Top max(50, 5X) / all (raw) */
 export const CLIMBERS_MODES = ["fold", "within", "all"] as const;
@@ -141,12 +155,12 @@ export function openDb(name = "chronoscribe") {
             await dexie.appSettings.put({ ...settings, id: SETTINGS_ID });
         },
 
-        listener(id: string): Promise<ListenerRow | undefined> {
-            return dexie.listeners.get(id);
+        async listener(id: string): Promise<ListenerRow | undefined> {
+            return parseListener(await dexie.listeners.get(id));
         },
 
-        listeners(): Promise<ListenerRow[]> {
-            return dexie.listeners.toArray();
+        async listeners(): Promise<ListenerRow[]> {
+            return (await dexie.listeners.toArray()).flatMap((row) => parseListener(row) ?? []);
         },
 
         async putListener(listener: ListenerRow): Promise<void> {
@@ -157,13 +171,34 @@ export function openDb(name = "chronoscribe") {
             await dexie.listeners.update(id, changes);
         },
 
-        /** Stores one page of a Listener's Scrobbles in a single transaction. */
-        async addScrobbles(rows: Omit<ScrobbleRow, "id">[]): Promise<void> {
-            await dexie.transaction("rw", dexie.scrobbles, () => dexie.scrobbles.bulkAdd(rows));
+        /** Stores one page of a Listener's Scrobbles in one transaction, completing their import on the last. */
+        async addPage(
+            id: string,
+            rows: Omit<ScrobbleRow, "id">[],
+            { last }: { last: boolean },
+        ): Promise<void> {
+            await dexie.transaction("rw", dexie.scrobbles, dexie.listeners, async () => {
+                await dexie.scrobbles.bulkAdd(rows);
+                if (last) await dexie.listeners.update(id, { importComplete: true });
+            });
         },
 
         async deleteScrobblesOf(id: string): Promise<void> {
             await scrobblesOf(id).delete();
+        },
+
+        /** The second of a Listener's oldest stored Scrobble, if they have any. */
+        async oldestUtsOf(id: string): Promise<number | undefined> {
+            return (await scrobblesOf(id).first())?.uts;
+        },
+
+        /** Deletes a Listener's Scrobbles from exactly the second `uts`. */
+        async deleteScrobblesAt(id: string, uts: number): Promise<void> {
+            await dexie.scrobbles.where("[listenerId+uts]").equals([id, uts]).delete();
+        },
+
+        countScrobblesOf(id: string): Promise<number> {
+            return scrobblesOf(id).count();
         },
 
         /** A Listener's Scrobbles, oldest first. */

@@ -1,5 +1,5 @@
 import { ChevronLeftIcon, ChevronRightIcon, PauseIcon, PlayIcon, SettingsIcon } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { z } from "zod";
 import { useShallow } from "zustand/react/shallow";
 import { Chart, Minimap, type ChartOptions } from "../chart";
@@ -31,9 +31,9 @@ import {
     Slider,
     Switch,
 } from "../ui";
-import { describedBy, FieldProblem, TimeZoneSelect, type FieldProblemOf } from "./fields";
+import { ApiKeyForm, TimeZoneSelect } from "./fields";
 import { useFlip } from "./flip";
-import { useServices, useSession, useSettings } from "./services";
+import { useServices, useSettings } from "./services";
 
 const count = (n: number, noun: string) => `${n.toLocaleString("en")} ${noun}${n === 1 ? "" : "s"}`;
 
@@ -252,49 +252,9 @@ function Toolbar({
 /** The API key, probed before it is saved, and the Listener's timezone. */
 function SettingsPanel({ listener }: { listener: ListenerRow }) {
     const { session } = useServices();
-    const storedKey = useSettings((settings) => settings.apiKey);
-    const check = useSession((state) => state.apiKeyCheck);
-    const [apiKey, setApiKey] = useState(storedKey);
-    // A check speaks only for the key it checked, so editing the key clears its message.
-    const checked = check.kind !== "idle" && check.apiKey === apiKey.trim() ? check : undefined;
-    const problem: FieldProblemOf | undefined =
-        checked?.kind === "rejected"
-            ? {
-                  id: "settings-api-key-problem",
-                  problem: checked.problem,
-                  username: listener.username,
-              }
-            : undefined;
-
-    function saveKey(event: FormEvent) {
-        event.preventDefault();
-        void session.changeApiKey(apiKey.trim());
-    }
-
     return (
         <Card className="flex-row flex-wrap items-start gap-x-6 gap-y-3 px-4 py-4">
-            <form onSubmit={saveKey} className="grid min-w-64 flex-1 gap-2">
-                <Label htmlFor="settings-api-key">API key</Label>
-                <div className="flex gap-2">
-                    <Input
-                        id="settings-api-key"
-                        value={apiKey}
-                        onChange={(e) => setApiKey(e.target.value)}
-                        autoComplete="off"
-                        required
-                        {...describedBy(problem)}
-                    />
-                    <Button type="submit" variant="secondary" disabled={check.kind === "checking"}>
-                        {check.kind === "checking" ? "Checking…" : "Save key"}
-                    </Button>
-                </div>
-                <FieldProblem shown={problem} />
-                {checked?.kind === "saved" && (
-                    <p role="status" className="text-sm text-muted-foreground">
-                        API key saved
-                    </p>
-                )}
-            </form>
+            <ApiKeyForm id="settings-api-key" username={listener.username} />
             <div className="grid gap-2">
                 <Label htmlFor="settings-time-zone">Timezone</Label>
                 <TimeZoneSelect

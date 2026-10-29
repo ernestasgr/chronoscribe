@@ -1,5 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from "react";
-import type { Job } from "../ingest";
+import { MAX_FAILURES, problemOf, type Job, type Retry } from "../ingest";
+import type { LastfmFailure } from "../lastfm";
 import {
     Button,
     Card,
@@ -13,7 +14,9 @@ import {
 } from "../ui";
 import { Dashboard } from "./Dashboard";
 import {
+    ApiKeyForm,
     describedBy,
+    ProblemMessage,
     FieldProblem,
     fieldOf,
     TimeZoneSelect,
@@ -114,16 +117,26 @@ function Setup({ status }: { status: SetupStatus }) {
     );
 }
 
-const formatEta = (ms: number) => {
-    const seconds = Math.ceil(ms / 1000);
-    return seconds < 60 ? `${seconds}s left` : `${Math.ceil(seconds / 60)} min left`;
-};
+const seconds = (ms: number) => Math.max(Math.ceil(ms / 1000), 1);
 
-const progressText = ({ progress, etaMs }: Job) =>
-    progress
-        ? `${progress.fetched.toLocaleString("en")} / ${progress.total.toLocaleString("en")} Scrobbles` +
-          (etaMs ? ` · ${formatEta(etaMs)}` : "")
+/** "about 12 s left", or in minutes past one. */
+const formatEta = (ms: number) =>
+    seconds(ms) < 60
+        ? `about ${seconds(ms)} s left`
+        : `about ${Math.ceil(seconds(ms) / 60)} min left`;
+
+/** What the status line says while a request is waited out before retrying. */
+const retryText = ({ failures, pausesAt, inMs, error }: Retry) =>
+    `${error.message} · retrying in ${seconds(inMs)} s (${failures} of ${pausesAt} failed)`;
+
+/** The status line: "48,000 / 96,451 Scrobbles · about 12 s left", or why it is waiting. */
+const progressText = ({ progress, etaMs, retry }: Job) => {
+    const counted = progress
+        ? `${progress.fetched.toLocaleString("en")} / ${progress.total.toLocaleString("en")} Scrobbles`
         : "Starting…";
+    if (retry) return `${counted} · ${retryText(retry)}`;
+    return progress && etaMs ? `${counted} · ${formatEta(etaMs)}` : counted;
+};
 
 function Importing({ listenerId, username }: { listenerId: string; username: string }) {
     const job = useQueue(({ queue }) =>
@@ -145,7 +158,49 @@ function Importing({ listenerId, username }: { listenerId: string; username: str
                 <p role="status" className="text-sm text-muted-foreground tabular-nums">
                     {job ? progressText(job) : "Starting…"}
                 </p>
+                {job?.status === "paused" && job.error && (
+                    <Paused error={job.error} username={username} />
+                )}
             </CardContent>
         </Centered>
+    );
+}
+
+/** Why the import paused, with what fixes it: waiting it out, or Settings. */
+function Paused({ error, username }: { error: LastfmFailure; username: string }) {
+    const { session } = useServices();
+    const resume = <Button onClick={() => void session.resumeImport()}>Resume</Button>;
+
+    if (error.kind !== "Hard")
+        return (
+            <div className="grid gap-3">
+                <p role="alert" className="text-sm text-destructive">
+                    The import paused after last.fm failed {MAX_FAILURES} times in a row:{" "}
+                    {error.message}. Everything fetched so far is kept.
+                </p>
+                {resume}
+            </div>
+        );
+
+    const problem = problemOf(error);
+    return (
+        <div className="grid gap-3">
+            <div role="alert" className="grid gap-1 text-sm">
+                <p className="text-destructive">
+                    The import paused:{" "}
+                    {problem.kind === "Unavailable" ? (
+                        `last.fm refused it (${error.message}).`
+                    ) : (
+                        <ProblemMessage problem={problem} username={username} />
+                    )}
+                </p>
+                <p className="text-muted-foreground">Fix it in Settings, then resume.</p>
+            </div>
+            <section aria-label="Settings" className="grid gap-3 rounded-lg border p-3">
+                <h2 className="text-sm font-medium">Settings</h2>
+                <ApiKeyForm id="import-api-key" username={username} />
+            </section>
+            {resume}
+        </div>
     );
 }
