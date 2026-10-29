@@ -1,7 +1,7 @@
 import * as Comlink from "comlink";
 import { createContext, useContext, useEffect } from "react";
 import { createStore, useStore, type StoreApi } from "zustand";
-import type { AppSettings } from "../db";
+import type { AppSettings, ListenerId } from "../db";
 import type { Subscriber } from "../events";
 import type { IngestEvents } from "../ingest";
 import type { DayWindow, StandingsTables } from "../standings";
@@ -14,7 +14,7 @@ export { panned } from "./view";
 export type View = Pick<ViewState, "playhead" | "window">;
 
 export interface ListenerRef {
-    id: string;
+    id: ListenerId;
     timeZone: string;
 }
 

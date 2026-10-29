@@ -1,7 +1,21 @@
 import { createStore, type StoreApi } from "zustand";
-import { listenerId, PAGE_SIZES, type Db, type ListenerRow, type PageSize } from "../db";
+import {
+    listenerId,
+    PAGE_SIZES,
+    type Db,
+    type ListenerId,
+    type ListenerRow,
+    type PageSize,
+} from "../db";
 import type { Emitter } from "../events";
-import { getRecentTracks, type Fetch, type LastfmFailure } from "../lastfm";
+import {
+    getRecentTracks,
+    unixSeconds,
+    unixSecondsAt,
+    type Fetch,
+    type LastfmFailure,
+    type UnixSeconds,
+} from "../lastfm";
 
 /** At most 4 last.fm requests per second, app-wide. */
 const MIN_REQUEST_GAP_MS = 250;
@@ -57,7 +71,7 @@ export type JobStatus = JobState["status"];
 interface JobBase {
     id: number;
     kind: "import";
-    listenerId: string;
+    listenerId: ListenerId;
     username: string;
     progress: JobProgress;
 }
@@ -125,7 +139,7 @@ export interface IngestState {
 
 export interface IngestEvents {
     /** Ingest has committed a change to a Listener's Scrobbles. */
-    scrobblesChanged: { listenerId: string };
+    scrobblesChanged: { listenerId: ListenerId };
     /** A job has finished, paused, failed or been cancelled. */
     jobSettled: { job: Job };
 }
@@ -177,7 +191,7 @@ export const etaMs = (pageTimes: readonly number[], pagesLeft: number): number =
 
 /** Where the next request reads from: page `page` of `pageSize` below `to`, with `fetched` stored. */
 interface Cursor {
-    to: number;
+    to: UnixSeconds;
     page: number;
     pageSize: PageSize;
     fetched: number;
@@ -245,7 +259,7 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
                   username,
                   timeZone,
                   pinnedArtists: existing?.pinnedArtists ?? [],
-                  importTo: Math.floor(lastViewedAt / 1000),
+                  importTo: unixSecondsAt(lastViewedAt),
                   importComplete: false,
                   pageSize: existing?.pageSize ?? PAGE_SIZES[0],
                   lastViewedAt,
@@ -261,7 +275,7 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
         const oldest = await db.oldestUtsOf(row.id);
         if (oldest !== undefined) await db.deleteScrobblesAt(row.id, oldest);
         return {
-            to: oldest === undefined ? row.importTo : oldest + 1,
+            to: oldest === undefined ? row.importTo : unixSeconds(oldest + 1),
             page: 1,
             pageSize,
             fetched: await db.countScrobblesOf(row.id),
@@ -409,7 +423,7 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
     }
 
     /** Cancels a Listener's queued jobs and aborts their running one. */
-    function cancel(listener: string): void {
+    function cancel(listener: ListenerId): void {
         store
             .getState()
             .queue.filter((job) => job.listenerId === listener && !isSettled(job))

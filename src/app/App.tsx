@@ -1,5 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import { MAX_FAILURES, problemOf, type Job, type JobProgress, type Retry } from "../ingest";
+import type { ListenerId } from "../db";
 import type { LastfmFailure } from "../lastfm";
 import {
     Button,
@@ -144,7 +145,7 @@ const progressText = (job: Job) => {
 const percentOf = (progress: JobProgress) =>
     progress.kind === "counted" ? (100 * progress.fetched) / Math.max(progress.total, 1) : 0;
 
-function Importing({ listenerId, username }: { listenerId: string; username: string }) {
+function Importing({ listenerId, username }: { listenerId: ListenerId; username: string }) {
     const job = useQueue(({ queue }) =>
         queue.findLast((queued) => queued.listenerId === listenerId),
     );

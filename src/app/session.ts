@@ -1,5 +1,5 @@
 import { createStore, type StoreApi } from "zustand";
-import { listenerId, mostRecentlyViewed, type Db, type ListenerRow } from "../db";
+import { listenerId, mostRecentlyViewed, type Db, type ListenerId, type ListenerRow } from "../db";
 import type { Subscriber } from "../events";
 import type {
     ImportRequest,
@@ -33,7 +33,7 @@ export type ApiKeyCheck =
 
 export type Screen =
     | { kind: "setup"; status: SetupStatus }
-    | { kind: "importing"; listenerId: string; username: string }
+    | { kind: "importing"; listenerId: ListenerId; username: string }
     | { kind: "dashboard"; listener: ListenerRow };
 
 export interface SessionState {

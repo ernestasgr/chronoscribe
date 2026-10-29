@@ -8,12 +8,15 @@ import {
     type FixtureResponse,
     type FixtureUser,
 } from "../../test-support/lastfm";
-import { openDb, type Db } from "../db";
+import { listenerId, openDb, type Db } from "../db";
+import { unixSecondsAt } from "../lastfm";
 import { createEventBus } from "../events";
 import { createIngest, transition, type IngestEvents, type Job, type JobStatus } from ".";
 
 const API_KEY = "fixture-key";
 const NOW = Date.parse("2026-07-10T12:00:00Z");
+const BRISTOL = listenerId("Bristol");
+const TWINS = listenerId("Twins");
 
 const request = (username: string, apiKey = API_KEY) => ({ username, apiKey, timeZone: "UTC" });
 
@@ -118,17 +121,17 @@ describe("the Import job", () => {
         const job = await ingest.enqueueImport(request("Bristol"));
 
         expect(job).toMatchObject({ status: "done", progress: { fetched: 2100, total: 2100 } });
-        const stored = await db.scrobblesOf("bristol");
+        const stored = await db.scrobblesOf(BRISTOL);
         expect(stored).toHaveLength(2100);
         expect(stored.filter((s) => s.artist === "Tricky")).toEqual([]);
         expect(stored[0]).toEqual({
-            listenerId: "bristol",
+            listenerId: BRISTOL,
             uts: Date.parse("2026-07-01T08:00:00Z") / 1000,
             artist: "Massive Attack",
             track: "Massive Attack track 0",
             album: "Massive Attack album",
         });
-        expect(await db.listener("bristol")).toMatchObject({
+        expect(await db.listener(BRISTOL)).toMatchObject({
             username: "Bristol",
             timeZone: "UTC",
             importComplete: true,
@@ -211,20 +214,20 @@ describe("the Import job", () => {
         const { ingest, requests } = setUp();
         const unsubscribe = ingest.store.subscribe(({ queue: [job] }) => {
             if (job?.progress.kind === "counted" && job.status === "running")
-                ingest.cancel("bristol");
+                ingest.cancel(BRISTOL);
         });
         const job = await ingest.enqueueImport(request("Bristol"));
         unsubscribe();
 
         expect(job.status).toBe("cancelled");
         expect(requests).toHaveLength(1);
-        expect(await db.listener("bristol")).toMatchObject({ importComplete: false });
+        expect(await db.listener(BRISTOL)).toMatchObject({ importComplete: false });
     });
 
     test("a Hard last.fm error pauses the job with that error and emits no change", async () => {
         const { ingest, events } = setUp();
         const changed: string[] = [];
-        events.on("scrobblesChanged", ({ listenerId }) => changed.push(listenerId));
+        events.on("scrobblesChanged", (changedEvent) => changed.push(changedEvent.listenerId));
 
         const job = await ingest.enqueueImport(request("Bristol", "wrong-key"));
 
@@ -244,8 +247,8 @@ describe("the Import job", () => {
             expect(job).toMatchObject({ status: "paused", error: { kind: "Hard", code } });
             expect(requests).toHaveLength(2);
             expect(sleeps.filter((ms) => ms >= 1000)).toEqual([]);
-            expect(await db.scrobblesOf("bristol")).toHaveLength(1000);
-            expect(await db.listener("bristol")).toMatchObject({ importComplete: false });
+            expect(await db.scrobblesOf(BRISTOL)).toHaveLength(1000);
+            expect(await db.listener(BRISTOL)).toMatchObject({ importComplete: false });
         },
     );
 
@@ -260,7 +263,7 @@ describe("the Import job", () => {
         const { ingest } = setUp([twins, bristol]);
         const unsubscribe = ingest.store.subscribe(({ queue: [job] }) => {
             if (job?.progress.kind === "counted" && job.status === "running")
-                ingest.cancel(username.toLowerCase());
+                ingest.cancel(listenerId(username));
         });
         await ingest.enqueueImport(request(username));
         unsubscribe();
@@ -268,7 +271,7 @@ describe("the Import job", () => {
 
     test("resumes from the oldest stored second, with nothing dropped or duplicated", async () => {
         await interruptAfterFirstPage("Twins");
-        const stored = await db.scrobblesOf("twins");
+        const stored = await db.scrobblesOf(TWINS);
         expect(stored).toHaveLength(1000);
         const oldestUts = stored[0]!.uts;
 
@@ -279,9 +282,9 @@ describe("the Import job", () => {
         expect(requests.map(({ url }) => Object.fromEntries(url.searchParams))).toMatchObject([
             { page: "1", to: String(oldestUts + 1) },
         ]);
-        expect(lines(await db.scrobblesOf("twins"))).toEqual(lines(twins.history));
-        expect(await db.listener("twins")).toMatchObject({
-            importTo: NOW / 1000,
+        expect(lines(await db.scrobblesOf(TWINS))).toEqual(lines(twins.history));
+        expect(await db.listener(TWINS)).toMatchObject({
+            importTo: unixSecondsAt(NOW),
             importComplete: true,
         });
     });
@@ -322,7 +325,7 @@ describe("the Import job", () => {
             error: expect.objectContaining({ kind: "Transient", code: 8 }),
         });
         expect(seen.at(-1)?.status).toBe("done");
-        expect(lines(await db.scrobblesOf("bristol"))).toEqual(
+        expect(lines(await db.scrobblesOf(BRISTOL))).toEqual(
             lines(bristol.history.filter(({ artist }) => artist !== "Tricky")),
         );
     });
@@ -332,7 +335,7 @@ describe("the Import job", () => {
             index >= 1 && index <= 6 ? lastfmError(29) : undefined,
         );
         const changed: string[] = [];
-        events.on("scrobblesChanged", ({ listenerId }) => changed.push(listenerId));
+        events.on("scrobblesChanged", (changedEvent) => changed.push(changedEvent.listenerId));
 
         const paused = await ingest.enqueueImport(request("Bristol"));
 
@@ -348,13 +351,13 @@ describe("the Import job", () => {
                 .map(({ limit }) => limit),
         ).toEqual(["1000", "200", "200", "200", "200", "200"]);
         // Page 1 is kept, less its oldest second, which the switch to pages of 200 fetches again.
-        expect(await db.scrobblesOf("bristol")).toHaveLength(999);
-        expect(await db.listener("bristol")).toMatchObject({ importComplete: false });
+        expect(await db.scrobblesOf(BRISTOL)).toHaveLength(999);
+        expect(await db.listener(BRISTOL)).toMatchObject({ importComplete: false });
         expect(changed).toEqual([]);
 
         const resumed = await ingest.enqueueImport(request("Bristol"));
         expect(resumed).toMatchObject({ status: "done", progress: { fetched: 2100, total: 2100 } });
-        expect(lines(await db.scrobblesOf("bristol"))).toEqual(
+        expect(lines(await db.scrobblesOf(BRISTOL))).toEqual(
             lines(bristol.history.filter(({ artist }) => artist !== "Tricky")),
         );
         expect(changed).toEqual(["bristol"]);
@@ -374,10 +377,10 @@ describe("the Import job", () => {
         const oldestOfFirstPage = Date.parse("2026-07-01T08:00:00Z") / 1000 + 1100 * 60;
         expect(rest[0]).toEqual({ page: "1", limit: "200", to: String(oldestOfFirstPage + 1) });
         expect(rest.every(({ limit }) => limit === "200")).toBe(true);
-        expect(lines(await db.scrobblesOf("bristol"))).toEqual(
+        expect(lines(await db.scrobblesOf(BRISTOL))).toEqual(
             lines(bristol.history.filter(({ artist }) => artist !== "Tricky")),
         );
-        expect(await db.listener("bristol")).toMatchObject({ pageSize: 200 });
+        expect(await db.listener(BRISTOL)).toMatchObject({ pageSize: 200 });
     });
 
     test("switches to pages of 200 when a page of 1000 fails, and remembers it for the Listener", async () => {
@@ -392,7 +395,7 @@ describe("the Import job", () => {
             { page: "2", limit: "1000" },
             { page: "1", limit: "200" },
         ]);
-        expect(lines(await db.scrobblesOf("bristol"))).toEqual(
+        expect(lines(await db.scrobblesOf(BRISTOL))).toEqual(
             lines(bristol.history.filter(({ artist }) => artist !== "Tricky")),
         );
 
@@ -414,16 +417,16 @@ describe("the Import job", () => {
         expect(first.status).toBe("done");
         expect(ingest.store.getState().queue).toHaveLength(1);
         expect(requests).toHaveLength(2);
-        expect(await db.scrobblesOf("bristol")).toHaveLength(2100);
+        expect(await db.scrobblesOf(BRISTOL)).toHaveLength(2100);
     });
 
     test("emits scrobblesChanged once the Scrobbles are stored, then jobSettled", async () => {
         const { ingest, events } = setUp();
         const seen: string[] = [];
         const stored: number[] = [];
-        events.on("scrobblesChanged", ({ listenerId }) => {
-            seen.push(`changed ${listenerId}`);
-            void db.scrobblesOf(listenerId).then((rows) => stored.push(rows.length));
+        events.on("scrobblesChanged", ({ listenerId: changed }) => {
+            seen.push(`changed ${changed}`);
+            void db.scrobblesOf(changed).then((rows) => stored.push(rows.length));
         });
         events.on("jobSettled", ({ job }) => seen.push(`settled ${job.listenerId} ${job.status}`));
 
@@ -506,7 +509,7 @@ describe("the Job's transitions", () => {
     const queued: Job = {
         id: 1,
         kind: "import",
-        listenerId: "bristol",
+        listenerId: BRISTOL,
         username: "Bristol",
         progress: { kind: "uncounted" },
         status: "queued",

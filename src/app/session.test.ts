@@ -2,7 +2,8 @@
 import "fake-indexeddb/auto";
 import { beforeEach, describe, expect, test } from "vitest";
 import { respondRecentTracks, scrobbles, type FixtureUser } from "../../test-support/lastfm";
-import { openDb, type Db } from "../db";
+import { listenerId, openDb, type Db } from "../db";
+import { unixSeconds, unixSecondsAt } from "../lastfm";
 import { createEventBus } from "../events";
 import { createIngest, type IngestEvents, type Job, type Outcome } from "../ingest";
 import { buildStandings } from "../standings";
@@ -12,6 +13,7 @@ import { createSettings } from "./settings";
 
 const API_KEY = "fixture-key";
 const NOW = Date.parse("2026-07-10T12:00:00Z");
+const BRISTOL = listenerId("Bristol");
 
 const bristol: FixtureUser = {
     username: "Bristol",
@@ -124,18 +126,22 @@ describe("an unfinished import", () => {
         db = openDb(`session-${crypto.randomUUID()}`);
         // A reload stopped Bristol's import with only their 4 newest Scrobbles stored.
         await db.putListener({
-            id: "bristol",
+            id: BRISTOL,
             username: "Bristol",
             timeZone: "UTC",
             pinnedArtists: [],
-            importTo: NOW / 1000,
+            importTo: unixSecondsAt(NOW),
             importComplete: false,
             pageSize: 1000,
             lastViewedAt: NOW,
         });
         await db.addPage(
-            "bristol",
-            bristol.history.slice(-4).map((scrobble) => ({ listenerId: "bristol", ...scrobble })),
+            BRISTOL,
+            bristol.history.slice(-4).map((scrobble) => ({
+                ...scrobble,
+                listenerId: BRISTOL,
+                uts: unixSeconds(scrobble.uts),
+            })),
             { last: false },
         );
     });
@@ -145,12 +151,12 @@ describe("an unfinished import", () => {
 
         expect(session.store.getState().screen).toEqual({
             kind: "importing",
-            listenerId: "bristol",
+            listenerId: BRISTOL,
             username: "Bristol",
         });
         await expect.poll(() => session.store.getState().screen.kind).toBe("dashboard");
         expect(requests).toHaveLength(1);
-        expect(await db.scrobblesOf("bristol")).toHaveLength(10);
+        expect(await db.scrobblesOf(BRISTOL)).toHaveLength(10);
     });
 
     test("pauses on a refused key, then resumes once Settings has a key last.fm takes", async () => {
@@ -162,7 +168,7 @@ describe("an unfinished import", () => {
 
         expect(storedKey(settings)).toBe(API_KEY);
         await expect.poll(() => session.store.getState().screen.kind).toBe("dashboard");
-        expect(await db.scrobblesOf("bristol")).toHaveLength(10);
+        expect(await db.scrobblesOf(BRISTOL)).toHaveLength(10);
     });
 
     test("pauses after a run of transient failures, then resumes when asked", async () => {
@@ -175,7 +181,7 @@ describe("an unfinished import", () => {
         await session.resumeImport();
 
         await expect.poll(() => session.store.getState().screen.kind).toBe("dashboard");
-        expect(await db.scrobblesOf("bristol")).toHaveLength(10);
+        expect(await db.scrobblesOf(BRISTOL)).toHaveLength(10);
     });
 });
 
@@ -227,11 +233,11 @@ describe("Settings", () => {
             timeZone: "America/Los_Angeles",
         });
         expect(requests).toHaveLength(requestsBefore);
-        expect(await db.listener("bristol")).toMatchObject({
+        expect(await db.listener(BRISTOL)).toMatchObject({
             timeZone: "America/Los_Angeles",
             importComplete: true,
         });
-        expect(await db.scrobblesOf("bristol")).toHaveLength(10);
+        expect(await db.scrobblesOf(BRISTOL)).toHaveLength(10);
     });
 });
 
@@ -239,7 +245,7 @@ describe("Settings", () => {
 const job = (outcome: Outcome): Job => ({
     id: 1,
     kind: "import",
-    listenerId: "bristol",
+    listenerId: BRISTOL,
     username: "Bristol",
     progress: { kind: "uncounted" },
     ...outcome,
@@ -248,17 +254,17 @@ const offline = { kind: "Transient", message: "Network error" } as const;
 
 describe("the session's transitions", () => {
     const bristolRow = {
-        id: "bristol",
+        id: BRISTOL,
         username: "Bristol",
         timeZone: "UTC",
         pinnedArtists: [],
-        importTo: NOW / 1000,
+        importTo: unixSecondsAt(NOW),
         importComplete: true,
         pageSize: 1000 as const,
         lastViewedAt: NOW,
     };
     const importing: SessionState = {
-        screen: { kind: "importing", listenerId: "bristol", username: "Bristol" },
+        screen: { kind: "importing", listenerId: BRISTOL, username: "Bristol" },
         apiKeyCheck: { kind: "idle" },
     };
     const dashboard: SessionState = {
