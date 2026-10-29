@@ -1,9 +1,18 @@
-import { ChevronLeftIcon, ChevronRightIcon, PauseIcon, PlayIcon, SettingsIcon } from "lucide-react";
+import {
+    ChevronLeftIcon,
+    ChevronRightIcon,
+    PauseIcon,
+    PlayIcon,
+    RefreshCwIcon,
+    SettingsIcon,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { z } from "zod";
 import { useShallow } from "zustand/react/shallow";
 import { Chart, Minimap, type ChartOptions } from "../chart";
 import { SECONDS_PER_DAY, SecondsPerDay, STEP_DAYS, StepDays, type ListenerRow } from "../db";
+import { isSettled } from "../ingest";
+import type { UnixSeconds } from "../lastfm";
 import {
     climbers,
     climbersCut,
@@ -17,6 +26,9 @@ import {
 } from "../standings";
 import { useFocusDay, usePlaying, useTables, useTimeline, type Timeline } from "../timeline";
 import {
+    Alert,
+    AlertDescription,
+    AlertTitle,
     Badge,
     Button,
     Card,
@@ -33,9 +45,31 @@ import {
 } from "../ui";
 import { ApiKeyForm, TimeZoneSelect } from "./fields";
 import { useFlip } from "./flip";
-import { useServices, useSettings } from "./services";
+import { useQueue, useServices, useSettings } from "./services";
 
 const count = (n: number, noun: string) => `${n.toLocaleString("en")} ${noun}${n === 1 ? "" : "s"}`;
+
+const MINUTE_MS = 60_000;
+
+/** How long ago a Listener was synced, as the toolbar puts it: "just now", "5 min ago", "3 h ago", "2 d ago". */
+export function syncAge(nowMs: number, syncedAt: UnixSeconds): string {
+    const minutes = Math.floor((nowMs - syncedAt * 1000) / MINUTE_MS);
+    if (minutes < 1) return "just now";
+    if (minutes < 60) return `${minutes} min ago`;
+    const hours = Math.floor(minutes / 60);
+    return hours < 24 ? `${hours} h ago` : `${Math.floor(hours / 24)} d ago`;
+}
+
+/** The time now from the app's clock, refreshed every `everyMs`, for labels that count from it. */
+function useNow(everyMs: number): number {
+    const { now: clock } = useServices();
+    const [now, setNow] = useState(clock);
+    useEffect(() => {
+        const timer = setInterval(() => setNow(clock()), everyMs);
+        return () => clearInterval(timer);
+    }, [clock, everyMs]);
+    return now;
+}
 
 const validX = (value: number) => Number.isInteger(value) && value >= 1 && value <= 100;
 
@@ -157,6 +191,7 @@ function Toolbar({
     return (
         <header className="flex flex-wrap items-center gap-x-6 gap-y-3 lg:col-span-2">
             <h1 className="text-xl font-semibold tracking-tight">{listener.username}</h1>
+            <SyncControl listener={listener} />
             <div className="flex min-w-48 flex-1 items-center gap-3">
                 <span className="text-sm font-medium whitespace-nowrap">Focus Day</span>
                 <Slider
@@ -246,6 +281,55 @@ function Toolbar({
                 </CollapsibleContent>
             </Collapsible>
         </header>
+    );
+}
+
+/** The Sync button and the Listener's sync age, a spinner while a Sync runs, and a Retry toast if one fails. */
+function SyncControl({ listener }: { listener: ListenerRow }) {
+    const { session } = useServices();
+    const sync = useQueue(({ queue }) =>
+        queue.findLast((job) => job.kind === "sync" && job.listenerId === listener.id),
+    );
+    const syncing = sync !== undefined && !isSettled(sync);
+    const now = useNow(MINUTE_MS);
+    const [dismissed, setDismissed] = useState<number>();
+
+    return (
+        <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" disabled={syncing} onClick={session.sync}>
+                <RefreshCwIcon className={syncing ? "animate-spin" : undefined} />
+                Sync
+            </Button>
+            {syncing ? (
+                <span role="status" aria-label="Syncing" className="text-sm text-muted-foreground">
+                    Syncing…
+                </span>
+            ) : (
+                <span className="text-sm text-muted-foreground">
+                    Synced {syncAge(now, listener.syncedAt)}
+                </span>
+            )}
+            {sync?.status === "failed" && dismissed !== sync.id && (
+                <Alert
+                    variant="destructive"
+                    className="fixed right-4 bottom-4 left-4 z-50 shadow-lg sm:left-auto sm:max-w-sm"
+                >
+                    <AlertTitle>Sync failed</AlertTitle>
+                    <AlertDescription>
+                        <p>{sync.error.message}</p>
+                        <p>Nothing was changed.</p>
+                        <div className="flex gap-2 pt-1">
+                            <Button size="sm" onClick={session.sync}>
+                                Retry
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => setDismissed(sync.id)}>
+                                Dismiss
+                            </Button>
+                        </div>
+                    </AlertDescription>
+                </Alert>
+            )}
+        </div>
     );
 }
 

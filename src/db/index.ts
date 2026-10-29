@@ -21,20 +21,30 @@ export interface ScrobbleRow {
 export const PAGE_SIZES = [1000, 200] as const;
 export type PageSize = (typeof PAGE_SIZES)[number];
 
-/** A stored Listener row; one from before page sizes were remembered asks for 1000. */
-const ListenerRowSchema = z.object({
-    id: z.string().transform(listenerId),
-    username: z.string(),
-    /** IANA timezone the Listener's Days are counted in. */
-    timeZone: z.string(),
-    pinnedArtists: z.array(z.string()),
-    /** The fixed, exclusive `to` the import pages up to. */
-    importTo: z.number().transform(unixSeconds),
-    importComplete: z.boolean(),
-    /** How many Scrobbles each import request asks for: 200 once last.fm has refused 1000. */
-    pageSize: z.literal(PAGE_SIZES).catch(PAGE_SIZES[0]),
-    lastViewedAt: z.number(),
-});
+/**
+ * A stored Listener row; one from before page sizes were remembered asks for 1000, and one from
+ * before Syncs counts as synced up to its import.
+ */
+const ListenerRowSchema = z
+    .object({
+        id: z.string().transform(listenerId),
+        username: z.string(),
+        /** IANA timezone the Listener's Days are counted in. */
+        timeZone: z.string(),
+        pinnedArtists: z.array(z.string()),
+        /** The fixed, exclusive `to` the import pages up to. */
+        importTo: z.number().transform(unixSeconds),
+        importComplete: z.boolean(),
+        /** How many Scrobbles each import request asks for: 200 once last.fm has refused 1000. */
+        pageSize: z.literal(PAGE_SIZES).catch(PAGE_SIZES[0]),
+        lastViewedAt: z.number(),
+        /** The exclusive `to` the history was last fetched up to, by its import or a Sync. */
+        syncedAt: z.number().optional(),
+    })
+    .transform(({ syncedAt, ...row }) => ({
+        ...row,
+        syncedAt: syncedAt === undefined ? row.importTo : unixSeconds(syncedAt),
+    }));
 
 export type ListenerRow = z.infer<typeof ListenerRowSchema>;
 
@@ -185,6 +195,26 @@ export function openDb(name = "chronoscribe") {
             await dexie.transaction("rw", dexie.scrobbles, dexie.listeners, async () => {
                 await dexie.scrobbles.bulkAdd(rows);
                 if (last) await dexie.listeners.update(id, { importComplete: true });
+            });
+        },
+
+        /**
+         * Replaces a Listener's Scrobbles after the second `after` with `rows` and records the
+         * Sync's `syncedAt` and page size, all in one transaction.
+         */
+        async replaceScrobblesAfter(
+            id: ListenerId,
+            after: UnixSeconds,
+            rows: Omit<ScrobbleRow, "id">[],
+            sync: Pick<ListenerRow, "syncedAt" | "pageSize">,
+        ): Promise<void> {
+            await dexie.transaction("rw", dexie.scrobbles, dexie.listeners, async () => {
+                await dexie.scrobbles
+                    .where("[listenerId+uts]")
+                    .between([id, after], [id, Dexie.maxKey], false, true)
+                    .delete();
+                await dexie.scrobbles.bulkAdd(rows);
+                await dexie.listeners.update(id, sync);
             });
         },
 

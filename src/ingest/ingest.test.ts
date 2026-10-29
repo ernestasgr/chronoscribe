@@ -437,6 +437,116 @@ describe("the Import job", () => {
     });
 });
 
+describe("the Sync job", () => {
+    let db: Db;
+    const DAY_MS = 86_400_000;
+    const SYNC_AT = Date.parse("2026-07-13T12:00:00Z");
+    const oldHistory = scrobbles("Cocteau Twins", 300, "2026-05-01T08:00:00Z");
+    const recentHistory = scrobbles("Lush", 1500, "2026-07-05T08:00:00Z");
+    let twins: FixtureUser;
+
+    /** Imports Twins at NOW, then moves the clock on to SYNC_AT. */
+    async function imported(script?: (url: URL, index: number) => Scripted) {
+        const fake = fakeTransport([twins], script);
+        const events = createEventBus<IngestEvents>();
+        const ingest = createIngest({ db, events, transport: fake.transport });
+        await ingest.enqueueImport(request("Twins"));
+        await fake.transport.sleep(SYNC_AT - fake.transport.now());
+        const changed: string[] = [];
+        events.on("scrobblesChanged", ({ listenerId: id }) => changed.push(id));
+        return { ...fake, ingest, changed, importRequests: fake.requests.length };
+    }
+
+    /** What last.fm holds after the import: an old and a recent deletion, a late Scrobble and new ones. */
+    const editedOnLastfm = () => [
+        ...oldHistory.slice(1),
+        ...recentHistory.filter((_, i) => i !== 10),
+        ...scrobbles("Slowdive", 2, "2026-07-08T08:00:00Z"),
+        ...scrobbles("Ride", 5, "2026-07-11T08:00:00Z"),
+    ];
+
+    beforeEach(() => {
+        db = openDb(`sync-${crypto.randomUUID()}`);
+        twins = { username: "Twins", history: [...oldHistory, ...recentHistory] };
+    });
+
+    test("replaces the last 14 days with last.fm's, reconciling late and deleted Scrobbles", async () => {
+        const { ingest, changed, requests, importRequests } = await imported();
+        twins.history = editedOnLastfm();
+
+        const job = await ingest.enqueueSync(request("Twins"));
+
+        expect(job).toMatchObject({ kind: "sync", status: "done" });
+        // Older than the window, so a deletion there is left alone.
+        const kept = oldHistory;
+        const fetched = editedOnLastfm().filter(
+            (s) => s.uts >= Date.parse("2026-06-29T12:00:00Z") / 1000,
+        );
+        expect(lines(await db.scrobblesOf(TWINS))).toEqual(lines([...kept, ...fetched]));
+        expect(await db.listener(TWINS)).toMatchObject({ syncedAt: unixSecondsAt(SYNC_AT) });
+        expect(changed).toEqual([TWINS]);
+        const syncRequests = requests.slice(importRequests).map(({ url }) => url.searchParams);
+        expect(syncRequests.map((params) => params.get("from"))).toEqual(
+            syncRequests.map(() => String(unixSecondsAt(SYNC_AT - 14 * DAY_MS))),
+        );
+    });
+
+    test("a failure on any page changes nothing", async () => {
+        let failing = false;
+        const { ingest, changed } = await imported((url) =>
+            failing && url.searchParams.get("page") === "2" ? lastfmError(10, 403) : undefined,
+        );
+        const before = lines(await db.scrobblesOf(TWINS));
+        twins.history = editedOnLastfm();
+        failing = true;
+
+        const job = await ingest.enqueueSync(request("Twins"));
+
+        expect(job).toMatchObject({ kind: "sync", status: "failed", error: { kind: "Hard" } });
+        expect(lines(await db.scrobblesOf(TWINS))).toEqual(before);
+        expect(await db.listener(TWINS)).toMatchObject({ syncedAt: unixSecondsAt(NOW) });
+        expect(changed).toEqual([]);
+    });
+
+    test("a Sync that drops to pages of 200 and then fails remembers nothing", async () => {
+        let failing = false;
+        const { ingest } = await imported((url, index) => {
+            if (!failing) return undefined;
+            if (url.searchParams.get("limit") === "1000") return cappedAt(200, url, [twins]);
+            return index % 2 === 0 ? "offline" : lastfmError(10, 403);
+        });
+        failing = true;
+
+        const job = await ingest.enqueueSync(request("Twins"));
+
+        expect(job).toMatchObject({ status: "failed" });
+        expect(await db.listener(TWINS)).toMatchObject({ pageSize: 1000 });
+    });
+
+    test("a Sync whose request keeps failing transiently gives up, changing nothing", async () => {
+        let failing = false;
+        const { ingest, changed } = await imported(() => (failing ? "offline" : undefined));
+        const before = lines(await db.scrobblesOf(TWINS));
+        failing = true;
+
+        const job = await ingest.enqueueSync(request("Twins"));
+
+        expect(job).toMatchObject({ status: "failed", error: { kind: "Transient" } });
+        expect(lines(await db.scrobblesOf(TWINS))).toEqual(before);
+        expect(changed).toEqual([]);
+    });
+
+    test("fetches everything since the last Sync when that was more than 14 days ago", async () => {
+        const { ingest, requests, importRequests, transport } = await imported();
+        await transport.sleep(30 * DAY_MS);
+
+        await ingest.enqueueSync(request("Twins"));
+
+        const froms = requests.slice(importRequests).map(({ url }) => url.searchParams.get("from"));
+        expect(new Set(froms)).toEqual(new Set([String(unixSecondsAt(NOW))]));
+    });
+});
+
 describe("the probe", () => {
     const bristol: FixtureUser = {
         username: "Bristol",

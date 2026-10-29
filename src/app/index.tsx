@@ -37,7 +37,7 @@ export async function boot(root: HTMLElement): Promise<void> {
 
     createRoot(root).render(
         <StrictMode>
-            <ServicesContext value={{ ingest, settings, session }}>
+            <ServicesContext value={{ ingest, settings, session, now: Date.now }}>
                 <TimelineContext value={timeline}>
                     <App />
                 </TimelineContext>

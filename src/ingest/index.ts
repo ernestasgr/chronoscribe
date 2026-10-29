@@ -14,6 +14,7 @@ import {
     unixSecondsAt,
     type Fetch,
     type LastfmFailure,
+    type LastfmScrobble,
     type UnixSeconds,
 } from "../lastfm";
 
@@ -27,6 +28,8 @@ const ETA_WINDOW = 5;
 export const MAX_FAILURES = 5;
 /** The wait before the first retry, doubling with each failure after it. */
 const FIRST_BACKOFF_MS = 1000;
+/** How far back a Sync fetches again, so late and deleted Scrobbles are reconciled. */
+const SYNC_WINDOW_SECONDS = 14 * 86_400;
 
 export interface Transport {
     fetch: Fetch;
@@ -51,7 +54,10 @@ export type JobProgress =
           etaMs: number;
       };
 
-/** How a job settled: `paused` keeps what was fetched and waits to be resumed; `failed` is a bug. */
+/**
+ * How a job settled: `paused` keeps what an import fetched and waits to be resumed; `failed` is a
+ * Sync that changed nothing, or a bug.
+ */
 export type Outcome =
     | { status: "paused"; error: LastfmFailure }
     | { status: "done" }
@@ -67,10 +73,13 @@ export type JobState =
 
 export type JobStatus = JobState["status"];
 
+/** An Import fetches a whole history; a Sync fetches its recent window again. */
+export type JobKind = "import" | "sync";
+
 /** Who a job is for and how far it has got, whatever its state. */
 interface JobBase {
     id: number;
-    kind: "import";
+    kind: JobKind;
     listenerId: ListenerId;
     username: string;
     progress: JobProgress;
@@ -142,6 +151,12 @@ export interface IngestEvents {
     scrobblesChanged: { listenerId: ListenerId };
     /** A job has finished, paused, failed or been cancelled. */
     jobSettled: { job: Job };
+}
+
+/** A Sync of a Listener whose import has finished. */
+export interface SyncRequest {
+    username: string;
+    apiKey: string;
 }
 
 export interface ImportRequest {
@@ -263,6 +278,7 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
                   importComplete: false,
                   pageSize: existing?.pageSize ?? PAGE_SIZES[0],
                   lastViewedAt,
+                  syncedAt: unixSecondsAt(lastViewedAt),
               };
         // A finished history is imported again from nothing.
         if (!resuming) await db.deleteScrobblesOf(id);
@@ -378,10 +394,94 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
         return { status: "done" };
     }
 
-    /** Queues an Import job, or joins the Listener's unsettled one; resolves to it once settled. */
-    function enqueueImport(request: ImportRequest): Promise<Job> {
-        const listener = listenerId(request.username);
-        const joined = unsettled.get(listener);
+    /**
+     * Fetches everything since the last Sync, or the last 14 days if that is more, into memory,
+     * then replaces that window in one transaction. Any failure stores nothing; never rejects.
+     */
+    async function runSync(
+        id: number,
+        request: SyncRequest,
+        signal: AbortSignal,
+    ): Promise<Outcome> {
+        const row = await db.listener(listenerId(request.username));
+        if (!row?.importComplete)
+            return {
+                status: "failed",
+                error: { kind: "Hard", message: "No finished import to sync" },
+            };
+        const to = unixSecondsAt(transport.now());
+        const from = unixSeconds(Math.min(row.syncedAt, to - SYNC_WINDOW_SECONDS));
+        let pageSize = row.pageSize;
+        let page = 1;
+        let fetched: LastfmScrobble[] = [];
+        let failures = 0;
+
+        for (;;) {
+            await throttle();
+            if (signal.aborted) return { status: "cancelled" };
+            const result = await getRecentTracks(
+                {
+                    user: row.username,
+                    apiKey: request.apiKey,
+                    page,
+                    limit: pageSize,
+                    from,
+                    to,
+                    signal,
+                },
+                transport.fetch,
+            );
+            if (!result.ok) {
+                const { error } = result;
+                if (error.kind === "Aborted") return { status: "cancelled" };
+                failures++;
+                if (error.kind === "Hard" || failures >= MAX_FAILURES)
+                    return { status: "failed", error };
+                const inMs = backoffMs(failures);
+                dispatch(id, {
+                    type: "retrying",
+                    retry: { failures, pausesAt: MAX_FAILURES, inMs, error },
+                });
+                await sleepUnlessAborted(inMs, signal);
+                continue;
+            }
+            failures = 0;
+            // A page cut short would leave a gap, so the window is fetched again in 200s.
+            if (pageSize !== SMALL_PAGE && result.value.perPage < pageSize) {
+                pageSize = SMALL_PAGE;
+                page = 1;
+                fetched = [];
+                continue;
+            }
+            const { scrobbles, totalPages, total } = result.value;
+            fetched = [...fetched, ...scrobbles];
+            dispatch(id, { type: "counted", fetched: fetched.length, total, etaMs: 0 });
+            if (scrobbles.length === 0 || page >= totalPages) break;
+            page++;
+        }
+        // The second at `from` is left as stored, whether or not last.fm counts it in the range.
+        await db.replaceScrobblesAfter(
+            row.id,
+            from,
+            fetched
+                .filter((scrobble) => scrobble.uts > from)
+                .map((scrobble) => ({ listenerId: row.id, ...scrobble })),
+            // The fallback to 200s is remembered only with a Sync that succeeds.
+            { syncedAt: to, pageSize },
+        );
+        events.emit("scrobblesChanged", { listenerId: row.id });
+        return { status: "done" };
+    }
+
+    /** Queues a job, or joins the Listener's unsettled one of the same kind; resolves to it once settled. */
+    function enqueue(
+        kind: JobKind,
+        username: string,
+        work: (id: number, signal: AbortSignal) => Promise<Outcome>,
+    ): Promise<Job> {
+        const listener = listenerId(username);
+        const key = `${kind} ${listener}`;
+        const joined = unsettled.get(key);
         if (joined) return joined;
         const id = runs.nextId++;
         const controller = new AbortController();
@@ -391,36 +491,48 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
                 ...queue,
                 {
                     id,
-                    kind: "import",
+                    kind,
                     listenerId: listener,
-                    username: request.username,
+                    username,
                     progress: { kind: "uncounted" },
                     status: "queued",
                 },
             ],
         }));
 
-        runs.tail = runs.tail.then(() => run(id, request, controller.signal));
+        runs.tail = runs.tail.then(() => run(id, work, controller.signal));
         const settled = runs.tail.then(() => {
             controllers.delete(id);
-            unsettled.delete(listener);
+            unsettled.delete(key);
             events.emit("jobSettled", { job: jobOf(id) });
             return jobOf(id);
         });
-        unsettled.set(listener, settled);
+        unsettled.set(key, settled);
         return settled;
     }
 
-    async function run(id: number, request: ImportRequest, signal: AbortSignal): Promise<void> {
+    async function run(
+        id: number,
+        work: (id: number, signal: AbortSignal) => Promise<Outcome>,
+        signal: AbortSignal,
+    ): Promise<void> {
         if (signal.aborted)
             return dispatch(id, { type: "settled", outcome: { status: "cancelled" } });
         dispatch(id, { type: "started" });
-        const outcome = await runImport(id, request, signal).catch((error: unknown): Outcome => ({
+        const outcome = await work(id, signal).catch((error: unknown): Outcome => ({
             status: "failed",
             error: { kind: "Transient", message: String(error) },
         }));
         dispatch(id, { type: "settled", outcome });
     }
+
+    /** Queues an Import job, or joins the Listener's unsettled one; resolves to it once settled. */
+    const enqueueImport = (request: ImportRequest): Promise<Job> =>
+        enqueue("import", request.username, (id, signal) => runImport(id, request, signal));
+
+    /** Queues a Sync of a finished Listener, or joins their unsettled one; resolves to it once settled. */
+    const enqueueSync = (request: SyncRequest): Promise<Job> =>
+        enqueue("sync", request.username, (id, signal) => runSync(id, request, signal));
 
     /** Cancels a Listener's queued jobs and aborts their running one. */
     function cancel(listener: ListenerId): void {
@@ -440,7 +552,7 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
         return result.ok ? { ok: true } : { ok: false, problem: problemOf(result.error) };
     }
 
-    return { store, enqueueImport, cancel, probe };
+    return { store, enqueueImport, enqueueSync, cancel, probe };
 }
 
 export type Ingest = ReturnType<typeof createIngest>;

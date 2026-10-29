@@ -222,6 +222,11 @@ export function createSession({
 
     events.on("jobSettled", async ({ job }) => {
         const listener = job.status === "done" ? await db.listener(job.listenerId) : undefined;
+        // A Sync's new tables are already being built from its `scrobblesChanged`.
+        if (job.kind === "sync") {
+            if (listener) dispatch({ type: "listenerChanged", listener });
+            return;
+        }
         if (dispatch({ type: "jobSettled", job, listener })) showCurrent();
     });
 
@@ -254,6 +259,16 @@ export function createSession({
             if (store.getState().apiKeyCheck.kind !== "saved") return;
             settings.update({ apiKey });
             await resumeImport();
+        },
+
+        /** Queues a Sync of the dashboard's Listener with the stored API key. */
+        sync(): void {
+            const listener = currentListener();
+            if (!listener) return;
+            void ingest.enqueueSync({
+                username: listener.username,
+                apiKey: settings.store.getState().apiKey,
+            });
         },
 
         /** Moves the current Listener's Days to `timeZone`, rebuilding the tables from what is stored. */
