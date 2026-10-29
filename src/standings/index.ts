@@ -264,6 +264,7 @@ const WARM_UP_DAYS = 30;
 const SEVEN_DAYS = 7;
 
 // The last drawn lines for each tables object, keyed on everything that decides them.
+// The last drawn lines for each tables object, keyed on everything that decides them.
 const drawnLinesMemo = new WeakMap<StandingsTables, { key: string; lines: readonly number[] }>();
 
 /**
@@ -344,6 +345,75 @@ export function valueAt(
     if (yAxis === "scrobbles") return tables.cumulative[index];
     const standing = tables.standing[index]!;
     return standing === UNRANKED ? undefined : standing;
+}
+
+/** The runs of Days `from` through `to` on which `artist` is outside the Top X, unranked included. */
+export function daysOutsideTopX(
+    tables: StandingsTables,
+    artist: number,
+    x: number,
+    from: number,
+    to: number,
+): DayWindow[] {
+    const outside = (day: number) => (valueAt(tables, artist, day, "standing") ?? x + 1) > x;
+    return Array.from({ length: Math.max(0, to - from + 1) }, (_, i) => from + i).reduce<
+        DayWindow[]
+    >((runs, day) => {
+        if (!outside(day)) return runs;
+        const last = runs.at(-1);
+        return last?.end === day - 1
+            ? [...runs.slice(0, -1), { start: last.start, end: day }]
+            : [...runs, { start: day, end: day }];
+    }, []);
+}
+
+/** A Pinned Artist found in the tables. */
+export interface PinnedArtist {
+    id: number;
+    artist: string;
+}
+
+// Each tables object's artist ids by name, built on the first lookup.
+const artistIdsMemo = new WeakMap<StandingsTables, ReadonlyMap<string, number>>();
+
+const indexByName = (tables: StandingsTables): ReadonlyMap<string, number> =>
+    new Map(tables.artists.map((artist, id) => [artist, id]));
+
+const artistIdsOf = (tables: StandingsTables): ReadonlyMap<string, number> =>
+    artistIdsMemo.get(tables) ?? artistIdsMemo.set(tables, indexByName(tables)).get(tables)!;
+
+/** The Artist named exactly `name` in `tables`, if there is one. */
+export function artistNamed(tables: StandingsTables, name: string): PinnedArtist | undefined {
+    const id = artistIdsOf(tables).get(name);
+    return id === undefined ? undefined : { id, artist: name };
+}
+
+/** The pinned names that name an Artist in `tables`, in the order pinned; the rest stay hidden. */
+export const resolvePins = (tables: StandingsTables, names: readonly string[]): PinnedArtist[] =>
+    names.flatMap((name) => artistNamed(tables, name) ?? []);
+
+/**
+ * Up to `limit` Artist names containing `query` in any case, best Standing on `day` first and
+ * the unranked last; a blank query matches nobody.
+ */
+export function searchArtists(
+    tables: StandingsTables,
+    query: string,
+    day: number,
+    limit: number,
+): string[] {
+    const needle = query.trim().toLowerCase();
+    if (needle === "") return [];
+    const base = day * tables.artists.length;
+    return tables.artists
+        .flatMap((artist, id) =>
+            artist.toLowerCase().includes(needle)
+                ? [{ artist, standing: tables.standing[base + id]! }]
+                : [],
+        )
+        .toSorted((a, b) => a.standing - b.standing || compareNames(a.artist, b.artist))
+        .slice(0, limit)
+        .map(({ artist }) => artist);
 }
 
 /** Every ArrayBuffer behind the tables, for a zero-copy transfer between threads. */

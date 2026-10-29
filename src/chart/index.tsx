@@ -1,16 +1,25 @@
 import { scaleLinear } from "d3-scale";
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, type ZoomBehavior } from "d3-zoom";
-import { useEffect, useRef, useState, type MouseEvent, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type RefObject } from "react";
 import { createStore, useStore, type StoreApi } from "zustand";
 import type { AppSettings } from "../db";
-import { dayDate, drawnLines, topX, type DayWindow, type StandingsTables } from "../standings";
+import {
+    dayDate,
+    daysOutsideTopX,
+    drawnLines,
+    topX,
+    type DayWindow,
+    type PinnedArtist,
+    type StandingsTables,
+} from "../standings";
 import { useFocusDay, useTimeline, type Timeline } from "../timeline";
 import { easeToward, GUTTER_TOP, logStandingTicks, spreadLabels, standingLevel } from "./geometry";
 import { dayScale, plotOf, useSize, type Plot, type Size } from "./layout";
 import {
     colorOf,
     linesGeometry,
+    type DashedSpans,
     mostScrobbles,
     strokeLines,
     yOnLine,
@@ -32,7 +41,6 @@ const HALF_LABEL = 34;
 const MIN_WINDOW_DAYS = 14;
 /** The least room a Standing label needs, in pixels. */
 const LABEL_PX = 14;
-const NO_PINS: readonly number[] = [];
 /** The height of an Artist label's box, and so the least room between two labels, in pixels. */
 const ARTIST_LABEL_PX = 18;
 /** The room an Artist label needs right of its dot; nearer the edge it flips to the left. */
@@ -41,6 +49,24 @@ const ARTIST_LABEL_ROOM = 160;
 const ARTIST_LABEL_OFFSET = 10;
 /** The padding either side of an Artist's name inside its box. */
 const ARTIST_LABEL_PAD = 5;
+
+/** Where each Pinned Artist's line is dashed: across each Day from `from` to `to` they're outside the Top X. */
+const dashedSpans = (
+    tables: StandingsTables,
+    pinned: readonly number[],
+    x: number,
+    dayX: (day: number) => number,
+    from: number,
+    to: number,
+): DashedSpans =>
+    new Map(
+        pinned.map((id) => [
+            id,
+            daysOutsideTopX(tables, id, x, from, to).map(
+                ({ start, end }) => [dayX(start - 0.5), dayX(end + 0.5)] as const,
+            ),
+        ]),
+    );
 
 /**
  * The top of the Scrobbles axis as it eases, shared by the canvas loop and the axis labels. It
@@ -60,17 +86,20 @@ const scrobblesScale = (plot: Plot, max: number) =>
     scaleLinear().domain([0, max]).range([plot.bottom, plot.top]);
 
 /**
- * The timeline chart: one line per drawn Artist, by Standing or by cumulative Scrobbles. The wheel
- * zooms and dragging pans the time axis only; clicking glides the Focus Day there.
+ * The timeline chart: one line per drawn Artist, by Standing or by cumulative Scrobbles, always
+ * including the Pinned Artists. The wheel zooms and dragging pans the time axis only; clicking
+ * glides the Focus Day there.
  */
 export function Chart({
     tables,
     x,
     options,
+    pins,
 }: {
     tables: StandingsTables;
     x: number;
     options: ChartOptions;
+    pins: readonly PinnedArtist[];
 }) {
     const figure = useRef<HTMLElement>(null);
     const canvas = useRef<HTMLCanvasElement>(null);
@@ -84,8 +113,9 @@ export function Chart({
     const size = useSize(figure);
     const pixelRatio = devicePixelRatio || 1;
     const paintedParts: PaintedParts = { timeAxis, marker, labels };
+    const pinned = useMemo(() => pins.map(({ id }) => id), [pins]);
 
-    useFrames(timeline, canvas, paintedParts, tables, x, options, size, scrobblesTop);
+    useFrames(timeline, canvas, paintedParts, tables, x, options, pinned, size, scrobblesTop);
     useTimeZoom(timeline, figure, tables, size);
 
     function focus(event: MouseEvent) {
@@ -116,6 +146,7 @@ export function Chart({
                     x={x}
                     options={options}
                     size={size}
+                    pins={pins}
                     scrobblesTop={scrobblesTop}
                     paintedParts={paintedParts}
                 />
@@ -141,6 +172,7 @@ function useFrames(
     tables: StandingsTables,
     x: number,
     { yAxis, belowTopX, lineShape, linesDrawn, hideFuture }: ChartOptions,
+    pinned: readonly number[],
     size: Size | undefined,
     scrobblesTop: ScrobblesTop,
 ) {
@@ -193,7 +225,7 @@ function useFrames(
             const dayX = dayScale(window, plot);
             const from = Math.max(0, Math.floor(window.start) - 1);
             const to = Math.min(last, Math.ceil(hideFuture ? playhead : window.end) + 1);
-            const artists = drawnLines(tables, window, x, linesDrawn, NO_PINS);
+            const artists = drawnLines(tables, window, x, linesDrawn, pinned);
             const scale = scaleOf(artists, fittedDay(playhead, from, to), now);
             const playheadX = dayX(playhead);
             const inView = playheadX >= plot.left - 0.5 && playheadX <= plot.right + 0.5;
@@ -212,7 +244,7 @@ function useFrames(
             context.clip();
             context.lineWidth = 1.8;
             const geometry = linesGeometry({ tables, artists, dayX, scale, from, to });
-            strokeLines(context, geometry, scale);
+            strokeLines(context, geometry, scale, dashedSpans(tables, pinned, x, dayX, from, to));
             context.restore();
             if (timeAxis.current) placeTimeAxis(timeAxis.current, tables, dayX, size);
             if (marker.current) placeMarker(marker.current, playheadX, inView, size);
@@ -247,6 +279,7 @@ function useFrames(
         lineShape,
         linesDrawn,
         hideFuture,
+        pinned,
         size,
         scrobblesTop,
     ]);
@@ -402,6 +435,7 @@ function Overlay({
     tables,
     x,
     options,
+    pins,
     size,
     scrobblesTop,
     paintedParts: { timeAxis, marker, labels },
@@ -409,6 +443,7 @@ function Overlay({
     tables: StandingsTables;
     x: number;
     options: ChartOptions;
+    pins: readonly PinnedArtist[];
     size: Size;
     scrobblesTop: ScrobblesTop;
     paintedParts: PaintedParts;
@@ -457,26 +492,42 @@ function Overlay({
                     {dayDate(tables, focusDay)}
                 </text>
             </g>
-            <ArtistLabels tables={tables} day={focusDay} x={x} group={labels} />
+            <ArtistLabels tables={tables} day={focusDay} x={x} pins={pins} group={labels} />
         </svg>
     );
 }
 
-/** A dot and a name for each Artist in the Focus Day's Top X, for the painter to put on its line. */
+/** The Focus Day's Top X, then the Pinned Artists outside it. */
+const labelledArtists = (
+    tables: StandingsTables,
+    day: number,
+    x: number,
+    pins: readonly PinnedArtist[],
+): PinnedArtist[] => {
+    const top = topX(tables, day, x);
+    return [...top, ...pins.filter((pin) => !top.some((row) => row.id === pin.id))];
+};
+
+/**
+ * A dot and a name for each Artist in the Focus Day's Top X and each Pinned Artist, for the
+ * painter to put on its line.
+ */
 function ArtistLabels({
     tables,
     day,
     x,
+    pins,
     group,
 }: {
     tables: StandingsTables;
     day: number;
     x: number;
+    pins: readonly PinnedArtist[];
     group: RefObject<SVGGElement | null>;
 }) {
     return (
         <g ref={group} role="group" aria-label="Artist labels" className="text-xs font-semibold">
-            {topX(tables, day, x).map((row) => (
+            {labelledArtists(tables, day, x, pins).map((row) => (
                 <g key={row.id} data-artist={row.id}>
                     <line stroke={colorOf(row.id)} strokeWidth={1} />
                     <rect

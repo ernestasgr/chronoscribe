@@ -112,11 +112,37 @@ export function linesGeometry({
     return new Map(artists.map((artist) => [artist, segmentsOf(yOf(artist), dayX, from, to)]));
 }
 
-/** Strokes each line of `geometry` onto `context` with the curve the scale asks for. */
+/** The dash pattern of a Pinned Artist's line on the Days they are outside the Top X. */
+const PINNED_DASH = [5, 4];
+const SOLID: number[] = [];
+/** Far enough past any canvas edge to stand for "everywhere" in a clip. */
+const EVERYWHERE = 1e6;
+
+/** The pixel spans, left to right, where each Pinned Artist's line is drawn dashed. */
+export type DashedSpans = ReadonlyMap<number, readonly (readonly [left: number, right: number])[]>;
+
+/** Clips `context` to `spans`, or with `outside` to everywhere but them. */
+function clipToSpans(
+    context: CanvasRenderingContext2D,
+    spans: readonly (readonly [number, number])[],
+    outside: boolean,
+) {
+    context.beginPath();
+    if (outside) context.rect(-EVERYWHERE, -EVERYWHERE, 2 * EVERYWHERE, 2 * EVERYWHERE);
+    for (const [left, right] of spans)
+        context.rect(left, -EVERYWHERE, right - left, 2 * EVERYWHERE);
+    context.clip("evenodd");
+}
+
+/**
+ * Strokes each line of `geometry` onto `context` with the curve the scale asks for, dashed within
+ * its `dashed` spans and solid elsewhere.
+ */
 export function strokeLines(
     context: CanvasRenderingContext2D,
     geometry: LinesGeometry,
     scale: LinesScale,
+    dashed: DashedSpans,
 ): void {
     const curve =
         scale.yAxis === "scrobbles"
@@ -125,12 +151,30 @@ export function strokeLines(
               ? curveBumpX
               : DAILY_CURVES[scale.shape];
     const path = line<Point>().curve(curve).context(context);
-    for (const [artist, segments] of geometry) {
-        context.strokeStyle = colorOf(artist);
+    const stroke = (segments: Point[][], dash: number[]) => {
+        context.setLineDash(dash);
         context.beginPath();
         for (const segment of segments) path(segment);
         context.stroke();
+    };
+    for (const [artist, segments] of geometry) {
+        context.strokeStyle = colorOf(artist);
+        const spans = dashed.get(artist) ?? [];
+        if (spans.length === 0) {
+            stroke(segments, SOLID);
+            continue;
+        }
+        for (const [outside, dash] of [
+            [true, SOLID],
+            [false, PINNED_DASH],
+        ] as const) {
+            context.save();
+            clipToSpans(context, spans, outside);
+            stroke(segments, dash);
+            context.restore();
+        }
     }
+    context.setLineDash(SOLID);
 }
 
 /** Where an Artist's drawn line is at pixel `x`, or undefined if it isn't drawn there. */

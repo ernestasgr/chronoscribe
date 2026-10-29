@@ -512,6 +512,62 @@ const job = (outcome: Outcome): Job => ({
 });
 const offline = { kind: "Transient", message: "Network error" } as const;
 
+/** The Pinned Artists of the Listener the dashboard shows. */
+const pinsOnScreen = (session: TestSession) => {
+    const { screen } = session.store.getState();
+    return screen.kind === "dashboard" ? screen.listener.pinnedArtists : undefined;
+};
+
+describe("Pinned Artists", () => {
+    let db: Db;
+    beforeEach(async () => {
+        db = openDb(`session-${crypto.randomUUID()}`);
+        await seed(db, bristol, { complete: true, lastViewedAt: NOW - 1000 });
+        await seed(db, bath, { complete: true, lastViewedAt: NOW - 2000 });
+    });
+
+    test("are kept by name on the Listener, once each, through a reload until unpinned", async () => {
+        const { session } = await setUp(db, { apiKey: API_KEY });
+
+        await session.pin("Massive Attack");
+        await session.pin("Burial");
+        await session.pin("Massive Attack");
+
+        expect(pinsOnScreen(session)).toEqual(["Massive Attack", "Burial"]);
+        const reopened = await setUp(db, { apiKey: API_KEY });
+        expect(pinsOnScreen(reopened.session)).toEqual(["Massive Attack", "Burial"]);
+
+        await reopened.session.unpin("Massive Attack");
+
+        expect(pinsOnScreen(reopened.session)).toEqual(["Burial"]);
+        expect((await db.listener(BRISTOL))?.pinnedArtists).toEqual(["Burial"]);
+    });
+
+    test("are kept for each Listener", async () => {
+        const { session } = await setUp(db, { apiKey: API_KEY });
+        await session.pin("Massive Attack");
+
+        await session.open(BATH);
+        expect(pinsOnScreen(session)).toEqual([]);
+        await session.pin("Goldfrapp");
+        await session.open(BRISTOL);
+
+        expect(pinsOnScreen(session)).toEqual(["Massive Attack"]);
+        expect((await db.listener(BATH))?.pinnedArtists).toEqual(["Goldfrapp"]);
+    });
+
+    test("survive a Sync", async () => {
+        const { session, ingest } = await setUp(db, { apiKey: API_KEY });
+        await session.pin("Massive Attack");
+
+        session.sync();
+
+        await expect.poll(() => ingest.store.getState().queue.at(-1)?.status).toBe("done");
+        await expect.poll(() => pinsOnScreen(session)).toEqual(["Massive Attack"]);
+        expect((await db.listener(BRISTOL))?.pinnedArtists).toEqual(["Massive Attack"]);
+    });
+});
+
 describe("the session's transitions", () => {
     const bristolRow = {
         id: BRISTOL,
