@@ -135,6 +135,10 @@ export function dayDate(tables: StandingsTables, day: number): string {
     return isoDate(first + day);
 }
 
+/** How many Days later `to`'s first Day falls than `from`'s, so a Day keeps its date across both. */
+export const firstDayShift = (from: StandingsTables, to: StandingsTables): number =>
+    (Date.parse(to.firstDay.date) - Date.parse(from.firstDay.date)) / 1000 / DAY_SECONDS;
+
 /** The X Artists with the best Standings on `day`. */
 export function topX(tables: StandingsTables, day: number, x: number): TopXRow[] {
     const artistCount = tables.artists.length;

@@ -47,6 +47,8 @@ export interface RecentTracksRequest {
     apiKey: string;
     page: number;
     limit: number;
+    /** Lower bound; last.fm's inclusiveness is not relied on. */
+    from?: UnixSeconds;
     /** Exclusive upper bound. */
     to?: UnixSeconds;
     signal?: AbortSignal;
@@ -77,6 +79,7 @@ const recentTracksUrl = (request: RecentTracksRequest): string => {
         format: "json",
         page: String(request.page),
         limit: String(request.limit),
+        ...(request.from === undefined ? {} : { from: String(request.from) }),
         ...(request.to === undefined ? {} : { to: String(request.to) }),
     }).toString();
     return url.toString();

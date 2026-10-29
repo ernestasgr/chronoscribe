@@ -4,7 +4,7 @@ import { createStore, useStore, type StoreApi } from "zustand";
 import type { AppSettings, ListenerId } from "../db";
 import type { Subscriber } from "../events";
 import type { IngestEvents } from "../ingest";
-import type { DayWindow, StandingsTables } from "../standings";
+import { firstDayShift, type DayWindow, type StandingsTables } from "../standings";
 import type { StandingsWorker } from "./standings.worker";
 import { clamp, transition, withinHistory, type ViewEvent, type ViewState } from "./view";
 
@@ -48,22 +48,35 @@ const lastDay = (tables: StandingsTables | undefined) => Math.max(0, (tables?.da
 
 /**
  * Swaps in a Listener's new tables. Fresh tables open on the whole history with the last Day in
- * focus; a rebuild of the same Listener's keeps the Focus Day and window.
+ * focus; a rebuild of the same Listener's keeps the Focus Day's and window's dates, even when the
+ * first Day has moved.
  */
 export function swapIn(state: TimelineState, tables: StandingsTables): Partial<TimelineState> {
     const last = lastDay(tables);
-    return state.tables
-        ? {
-              tables,
-              playhead: clamp(state.playhead, 0, last),
-              window: withinHistory(state.window, last),
-          }
-        : {
-              tables,
-              playhead: last,
-              window: { start: 0, end: last },
-              motion: { kind: "still" },
-          };
+    if (state.tables) {
+        const shift = firstDayShift(state.tables, tables);
+        const { start, end } = state.window;
+        // A window that reached the last Day keeps reaching it, so a Sync's new Days come into view.
+        const reachedLast = end >= lastDay(state.tables);
+        return {
+            tables,
+            playhead: clamp(state.playhead - shift, 0, last),
+            window: withinHistory(
+                { start: start - shift, end: reachedLast ? last : end - shift },
+                last,
+            ),
+            // A glide's Days are counted from the old first Day, so it stops where it is.
+            ...(shift !== 0 && state.motion.kind === "gliding"
+                ? { motion: { kind: "still" } }
+                : {}),
+        };
+    }
+    return {
+        tables,
+        playhead: last,
+        window: { start: 0, end: last },
+        motion: { kind: "still" },
+    };
 }
 
 /** The view after `event`, over the tables held. */

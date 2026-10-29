@@ -10,6 +10,8 @@ export interface Services {
     ingest: Ingest;
     settings: Settings;
     session: Session;
+    /** The clock that labels counting from now, such as the sync age, read. */
+    now: () => number;
 }
 
 export const ServicesContext = createContext<Services | undefined>(undefined);

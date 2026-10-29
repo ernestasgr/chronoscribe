@@ -42,5 +42,12 @@ _Avoid_: Mover, riser
 The single Day the timeline is currently inspecting; its Top X, Daily plays and Climbers are what the chart reports on.
 _Avoid_: Selected date, current day
 
+**Import**:
+Fetching a Listener's whole history from last.fm, newest first; it can pause and resume.
+
+**Sync**:
+Fetching a finished Listener's recent Scrobbles again (everything since the last Sync, and at least the last 14 Days) and replacing that window all at once, so late and deleted Scrobbles are reconciled. A failed Sync changes nothing.
+_Avoid_: Refresh, update
+
 **Pinned Artist**:
 An Artist the Listener has chosen to keep visible on the timeline regardless of whether it is in the Top X.
