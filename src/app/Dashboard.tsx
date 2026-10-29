@@ -12,7 +12,6 @@ import { useShallow } from "zustand/react/shallow";
 import { Chart, Minimap, type ChartOptions } from "../chart";
 import { SECONDS_PER_DAY, SecondsPerDay, STEP_DAYS, StepDays, type ListenerRow } from "../db";
 import { isSettled } from "../ingest";
-import type { UnixSeconds } from "../lastfm";
 import {
     climbers,
     climbersCut,
@@ -45,31 +44,9 @@ import {
 } from "../ui";
 import { ApiKeyForm, TimeZoneSelect } from "./fields";
 import { useFlip } from "./flip";
+import { count, MINUTE_MS, syncAge, useNow } from "./labels";
+import { ListenerMenu } from "./ListenerMenu";
 import { useQueue, useServices, useSettings } from "./services";
-
-const count = (n: number, noun: string) => `${n.toLocaleString("en")} ${noun}${n === 1 ? "" : "s"}`;
-
-const MINUTE_MS = 60_000;
-
-/** How long ago a Listener was synced, as the toolbar puts it: "just now", "5 min ago", "3 h ago", "2 d ago". */
-export function syncAge(nowMs: number, syncedAt: UnixSeconds): string {
-    const minutes = Math.floor((nowMs - syncedAt * 1000) / MINUTE_MS);
-    if (minutes < 1) return "just now";
-    if (minutes < 60) return `${minutes} min ago`;
-    const hours = Math.floor(minutes / 60);
-    return hours < 24 ? `${hours} h ago` : `${Math.floor(hours / 24)} d ago`;
-}
-
-/** The time now from the app's clock, refreshed every `everyMs`, for labels that count from it. */
-function useNow(everyMs: number): number {
-    const { now: clock } = useServices();
-    const [now, setNow] = useState(clock);
-    useEffect(() => {
-        const timer = setInterval(() => setNow(clock()), everyMs);
-        return () => clearInterval(timer);
-    }, [clock, everyMs]);
-    return now;
-}
 
 const validX = (value: number) => Number.isInteger(value) && value >= 1 && value <= 100;
 
@@ -190,7 +167,9 @@ function Toolbar({
 
     return (
         <header className="flex flex-wrap items-center gap-x-6 gap-y-3 lg:col-span-2">
-            <h1 className="text-xl font-semibold tracking-tight">{listener.username}</h1>
+            <h1 className="text-xl font-semibold tracking-tight">
+                <ListenerMenu current={listener}>{listener.username}</ListenerMenu>
+            </h1>
             <SyncControl listener={listener} />
             <div className="flex min-w-48 flex-1 items-center gap-3">
                 <span className="text-sm font-medium whitespace-nowrap">Focus Day</span>

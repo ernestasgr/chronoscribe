@@ -127,6 +127,11 @@ export function createTimeline({ build, events, now, requestFrame, playback }: T
         void rebuild(listener);
     }
 
+    /** Lets go of the Listener and their tables, dropping any build still running. */
+    function clear(): void {
+        store.setState(({ buildId }) => ({ ...INITIAL, buildId: buildId + 1 }));
+    }
+
     const dispose = events.on("scrobblesChanged", ({ listenerId }) => {
         const { listener } = store.getState();
         if (listener?.id === listenerId) void rebuild(listener);
@@ -135,6 +140,7 @@ export function createTimeline({ build, events, now, requestFrame, playback }: T
     return {
         store,
         show,
+        clear,
         dispose: () => {
             dispose();
             stopAnimating();

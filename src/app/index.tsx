@@ -33,6 +33,7 @@ export async function boot(root: HTMLElement): Promise<void> {
         settings,
         listeners: await db.listeners(),
         defaultTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        now: Date.now,
     });
 
     createRoot(root).render(
