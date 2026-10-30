@@ -63,6 +63,7 @@ type ChronoscribeDexie = Dexie & {
 };
 
 function openDexie(name: string): ChronoscribeDexie {
+    // cast: Dexie's documented way to type its tables, which `version().stores()` below declares.
     const dexie = new Dexie(name) as ChronoscribeDexie;
     dexie.version(1).stores({
         appSettings: "id",

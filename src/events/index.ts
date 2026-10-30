@@ -24,6 +24,7 @@ export function createEventBus<Events extends object>(): EventBus<Events> {
     };
 
     return {
+        // cast: one map holds every event's handlers, so a handler's payload type is lost; `on` keys them by type.
         emit: (type, payload) => of(type).forEach((handler) => handler(payload as never)),
         on: (type, handler) => {
             of(type).add(handler);

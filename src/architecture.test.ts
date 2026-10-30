@@ -72,6 +72,32 @@ function violations(root: string): string[] {
     });
 }
 
+/** An import or export specifier renamed with `as`, alone on its line or in a one-line list. */
+const RENAME = /^\s*(?:import\b|export\s*\{|[\w$]+ as [\w$]+,?$)/;
+/** A type assertion, other than `as const`: an expression followed by `as` and a type. */
+const ASSERTION = /[\w$)\]]\s+as\s+(?:[A-Z[(]|unknown\b|never\b|any\b)/;
+/** A line that is only a comment, where `as` is prose. */
+const COMMENT = /^\s*(?:\/\/|\/\*|\*)/;
+/** A brand constructor: a one-line arrow whose result is asserted to its own return type. */
+const BRAND_CONSTRUCTOR = /\): ([\w$]+) =>.* as \1;$/;
+
+/** Every `as` assertion in `root` that is neither a brand constructor nor explained by a `// cast:` comment above it. */
+function uncheckedCasts(root: string): string[] {
+    return sourceFiles(root)
+        .filter((file) => !file.endsWith(".test.ts"))
+        .flatMap((file) => {
+            const name = relative(root, file).split(sep).join("/");
+            const lines = readFileSync(file, "utf8").split(/\r?\n/);
+            return lines.flatMap((line, i) => {
+                const code = line.replace(/\/\/.*$/, "");
+                if (COMMENT.test(line) || RENAME.test(code) || !ASSERTION.test(code)) return [];
+                if (BRAND_CONSTRUCTOR.test(code.trimEnd())) return [];
+                if (/\/\/ cast: \S/.test(lines[i - 1] ?? "")) return [];
+                return [`${name}:${i + 1} asserts a type with no // cast: reason`];
+            });
+        });
+}
+
 test("modules import each other only through their public surface, and only downward", () => {
     expect(violations(resolve(import.meta.dirname))).toEqual([]);
 });
@@ -117,4 +143,26 @@ test("the check catches a bypassed public surface and an upward import", () => {
         'db/index.ts imports "../ingest", but db sits below ingest',
         'ingest/index.ts imports "../db/internal", which bypasses the db public surface',
     ]);
+});
+
+test("every type assertion is a brand constructor or says why with // cast:", () => {
+    expect(uncheckedCasts(resolve(import.meta.dirname))).toEqual([]);
+});
+
+test("the cast check allows brands, renames and explained casts, and catches the rest", () => {
+    const root = mkdtempSync(join(tmpdir(), "casts-"));
+    writeFileSync(
+        join(root, "fixture.ts"),
+        [
+            'import { a as b } from "x";',
+            "export const meters = (n: number): Meters => n as Meters;",
+            "const modes = [1, 2] as const;",
+            "// cast: the library types this loosely",
+            "const tuple = loose() as [number, number];",
+            "const body = (await response.json()) as Body;",
+            "",
+        ].join("\n"),
+    );
+
+    expect(uncheckedCasts(root)).toEqual(["fixture.ts:6 asserts a type with no // cast: reason"]);
 });

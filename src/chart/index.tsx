@@ -406,6 +406,7 @@ function useTimeZoom(
             .on("zoom", ({ transform, sourceEvent }) => {
                 // Only the user's own wheel and drags move the window; syncs from it don't echo.
                 if (!sourceEvent) return;
+                // cast: d3 types a linear scale's domain as number[], though it always has two ends.
                 const [start, end] = transform.rescaleX(full).domain() as [number, number];
                 gesturing = true;
                 setWindow({ start, end });
