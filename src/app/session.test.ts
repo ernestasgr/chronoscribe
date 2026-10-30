@@ -9,7 +9,7 @@ import { createIngest, type IngestEvents, type Job, type Outcome } from "../inge
 import { buildStandings } from "../standings";
 import { createTimeline } from "../timeline";
 import { createFailures } from "./failures";
-import { createSession, transition, type SessionState } from "./session";
+import { createSession, transition, viewedListener, type SessionState } from "./session";
 import { createSettings } from "./settings";
 
 const API_KEY = "fixture-key";
@@ -306,7 +306,7 @@ type TestSession = Awaited<ReturnType<typeof setUp>>["session"];
 /** What the session shows, in a word and a Listener. */
 const viewing = (session: TestSession) => {
     const { screen } = session.store.getState();
-    if (screen.kind === "dashboard") return `dashboard ${screen.listener.id}`;
+    if (screen.kind === "dashboard") return `dashboard ${screen.listenerId}`;
     return screen.kind === "importing" ? `importing ${screen.listenerId}` : "setup";
 };
 
@@ -516,10 +516,8 @@ const job = (outcome: Outcome): Job => ({
 const offline = { kind: "Transient", message: "Network error" } as const;
 
 /** The Pinned Artists of the Listener the dashboard shows. */
-const pinsOnScreen = (session: TestSession) => {
-    const { screen } = session.store.getState();
-    return screen.kind === "dashboard" ? screen.listener.pinnedArtists : undefined;
-};
+const pinsOnScreen = (session: TestSession) =>
+    viewedListener(session.store.getState())?.pinnedArtists;
 
 describe("Pinned Artists", () => {
     let db: Db;
@@ -604,7 +602,7 @@ describe("the session's transitions", () => {
         listeners: [],
     };
     const dashboard: SessionState = {
-        screen: { kind: "dashboard", listener: bristolRow },
+        screen: { kind: "dashboard", listenerId: BRISTOL },
         apiKeyCheck: { kind: "idle" },
         listeners: [bristolRow],
     };

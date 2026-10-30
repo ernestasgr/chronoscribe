@@ -36,7 +36,7 @@ import {
     type ProblemField,
 } from "./fields";
 import { useFailures, useQueue, useServices, useSession, useSettings } from "./services";
-import type { SetupStatus } from "./session";
+import { viewedListener, type SetupStatus } from "./session";
 
 export function App() {
     return (
@@ -56,8 +56,14 @@ function Screen() {
         case "importing":
             return <Importing listenerId={screen.listenerId} username={screen.username} />;
         case "dashboard":
-            return <Dashboard listener={screen.listener} />;
+            return <ViewedDashboard />;
     }
+}
+
+/** The dashboard of the Listener in view, once their row is listed. */
+function ViewedDashboard() {
+    const listener = useSession(viewedListener);
+    return listener ? <Dashboard listener={listener} /> : null;
 }
 
 /** The latest failure of something the app did in the background, until dismissed. */
