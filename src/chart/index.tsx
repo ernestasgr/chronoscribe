@@ -362,7 +362,7 @@ function placeLabels(
         const y = ys[i];
         item.style.display = y === undefined ? "none" : "";
         if (y === undefined) return;
-        const shift = spread[placed++]! - y;
+        const shift = (spread[placed++] ?? y) - y;
         const side = flipped ? -1 : 1;
         item.setAttribute("transform", `translate(${playheadX},${y})`);
         const leader = item.querySelector("line");

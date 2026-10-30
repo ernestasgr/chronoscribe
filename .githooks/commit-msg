@@ -1,0 +1,10 @@
+#!/bin/sh
+# Enforces Conventional Commits: type(scope): subject. Autosquash and revert subjects pass through.
+subject=$(head -n 1 "$1")
+pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^)]+\))?!?: .+'
+if printf '%s' "$subject" | grep -Eq "$pattern|^(fixup|squash|amend)! |^Revert \""; then
+    exit 0
+fi
+echo "commit-msg: subject must be a Conventional Commit, type(scope): subject" >&2
+echo "  got: $subject" >&2
+exit 1

@@ -5,11 +5,42 @@
         "correctness": "error",
         "suspicious": "warn"
     },
-    "ignorePatterns": ["dist", ".scratch", ".claude"],
+    "ignorePatterns": ["dist", ".scratch", ".claude", "spike"],
     "rules": {
         "react/react-in-jsx-scope": "off",
         "react/rules-of-hooks": "error",
         "react/exhaustive-deps": "error",
-        "typescript/no-explicit-any": "error"
-    }
+        "typescript/no-explicit-any": "error",
+        "typescript/no-non-null-assertion": "error",
+        "eslint/max-lines": ["error", { "max": 300, "skipBlankLines": true, "skipComments": true }],
+        "eslint/no-restricted-globals": [
+            "error",
+            { "name": "localStorage", "message": "Store data in Dexie through the db module." },
+            { "name": "sessionStorage", "message": "Store data in Dexie through the db module." }
+        ]
+    },
+    "overrides": [
+        {
+            "files": [
+                "src/standings/index.ts",
+                "src/chart/geometry.ts",
+                "src/chart/lines.ts",
+                "src/app/flip.ts"
+            ],
+            "rules": { "typescript/no-non-null-assertion": "off" }
+        },
+        {
+            "files": ["**/*.test.ts", "e2e/**", "test-support/**"],
+            "rules": { "typescript/no-non-null-assertion": "off", "eslint/max-lines": "off" }
+        },
+        {
+            "files": [
+                "src/chart/index.tsx",
+                "src/ingest/index.ts",
+                "src/app/session.ts",
+                "src/standings/index.ts"
+            ],
+            "rules": { "eslint/max-lines": "off" }
+        }
+    ]
 }

@@ -1,0 +1,3 @@
+#!/bin/sh
+# Runs the same check as CI, minus e2e, so a commit never lands red.
+exec pnpm check

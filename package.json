@@ -3,7 +3,6 @@
     "version": "0.0.0",
     "private": true,
     "type": "module",
-    "packageManager": "pnpm@11.8.0",
     "scripts": {
         "dev": "vite",
         "build": "tsc --noEmit && vite build",
@@ -13,7 +12,9 @@
         "fmt": "oxfmt",
         "fmt:check": "oxfmt --check",
         "test": "vitest run",
-        "e2e": "playwright test"
+        "e2e": "playwright test",
+        "check": "pnpm typecheck && pnpm lint && pnpm fmt:check && pnpm test && vite build",
+        "prepare": "git config core.hooksPath .githooks"
     },
     "dependencies": {
         "class-variance-authority": "^0.7.1",
@@ -50,5 +51,6 @@
         "typescript": "^7.0.2",
         "vite": "^8.3.5",
         "vitest": "^5.0.5"
-    }
+    },
+    "packageManager": "pnpm@11.8.0"
 }
