@@ -8,6 +8,7 @@ import { createEventBus } from "../events";
 import { createIngest, type IngestEvents, type Job, type Outcome } from "../ingest";
 import { buildStandings } from "../standings";
 import { createTimeline } from "../timeline";
+import { createFailures } from "./failures";
 import { createSession, transition, type SessionState } from "./session";
 import { createSettings } from "./settings";
 
@@ -49,7 +50,8 @@ async function setUp(
     const requests: URL[] = [];
     const events = createEventBus<IngestEvents>();
     if (apiKey !== undefined) await db.saveSettings({ ...(await db.loadSettings()), apiKey });
-    const settings = await createSettings(db);
+    const failures = createFailures();
+    const settings = await createSettings(db, failures);
     const ingest = createIngest({
         db,
         events,
@@ -92,12 +94,13 @@ async function setUp(
         ingest,
         timeline,
         settings,
+        failures,
         listeners: await db.listeners(),
         defaultTimeZone: "UTC",
         now: () => ++clock,
     });
     const firstDay = () => timeline.store.getState().tables?.firstDay;
-    return { requests, settings, ingest, timeline, session, firstDay };
+    return { requests, settings, ingest, timeline, session, failures, firstDay };
 }
 
 const storedKey = (settings: Awaited<ReturnType<typeof createSettings>>) =>
@@ -554,6 +557,21 @@ describe("Pinned Artists", () => {
 
         expect(pinsOnScreen(session)).toEqual(["Massive Attack"]);
         expect((await db.listener(BATH))?.pinnedArtists).toEqual(["Goldfrapp"]);
+    });
+
+    test("a pin the browser's storage refuses is reported, and the screen keeps what is stored", async () => {
+        const refusing: Db = {
+            ...db,
+            updateListener: () => Promise.reject(new Error("QuotaExceededError")),
+        };
+        const { session, failures } = await setUp(refusing, { apiKey: API_KEY });
+
+        await session.pin("Massive Attack");
+
+        expect(pinsOnScreen(session)).toEqual([]);
+        expect(failures.store.getState().latest?.message).toBe(
+            "Couldn't pin the Artist: Error: QuotaExceededError",
+        );
     });
 
     test("survive a Sync", async () => {

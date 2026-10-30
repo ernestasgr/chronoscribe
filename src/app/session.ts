@@ -11,6 +11,7 @@ import {
     type ProbeResult,
 } from "../ingest";
 import type { Timeline } from "../timeline";
+import type { Failures } from "./failures";
 import type { Settings } from "./settings";
 
 /** Why setup shows a message: a taken username, a probe that turned it down, or an unfinished import. */
@@ -191,6 +192,8 @@ export interface SessionDeps {
     ingest: Ingest;
     timeline: Timeline;
     settings: Settings;
+    /** Where the failures of actions nobody awaits are reported. */
+    failures: Pick<Failures, "report">;
     /** Every stored Listener: the app opens on the most recently viewed, resuming unfinished imports. */
     listeners: readonly ListenerRow[];
     /** The browser's timezone, offered for new Listeners. */
@@ -206,6 +209,7 @@ export function createSession({
     ingest,
     timeline,
     settings,
+    failures,
     listeners,
     defaultTimeZone,
     now,
@@ -273,6 +277,28 @@ export function createSession({
         if (read === reads.latest) store.setState({ listeners: byRecentView(stored) });
     }
 
+    /** Reads the Listeners back after a failure, so the screen shows what is stored. */
+    async function resync(): Promise<void> {
+        await reload();
+        const listener = currentListener();
+        const stored = listener && storedListener(listener.id);
+        if (stored) dispatch({ type: "listenerChanged", listener: stored });
+    }
+
+    /**
+     * `action`, reporting a failure as `what` and resyncing with storage rather than rejecting,
+     * since the UI calls it without awaiting.
+     */
+    const guarded =
+        <Args extends unknown[]>(what: string, action: (...args: Args) => Promise<void>) =>
+        (...args: Args): Promise<void> =>
+            action(...args).catch(async (error: unknown) => {
+                failures.report(what, error);
+                await resync().catch((resyncError: unknown) =>
+                    failures.report("Couldn't read the Listeners", resyncError),
+                );
+            });
+
     const storedListener = (id: ListenerId) =>
         store.getState().listeners.find((listener) => listener.id === id);
 
@@ -323,16 +349,15 @@ export function createSession({
         await reload();
     }
 
-    events.on("jobSettled", async ({ job }) => {
+    const onJobSettled = guarded("Couldn't read the finished job's Listener", async (job: Job) => {
         const listener = job.status === "done" ? await db.listener(job.listenerId) : undefined;
-        void reload();
         // A Sync's new tables are already being built from its `scrobblesChanged`.
         if (job.kind === "sync") {
             if (listener) dispatch({ type: "listenerChanged", listener });
-            return;
-        }
-        if (dispatch({ type: "jobSettled", job, listener })) showCurrent();
+        } else if (dispatch({ type: "jobSettled", job, listener })) showCurrent();
+        await reload();
     });
+    const stopListening = events.on("jobSettled", ({ job }) => void onJobSettled(job));
 
     if (initial?.importComplete) timeline.show(initial);
     byRecentView(listeners)
@@ -345,46 +370,57 @@ export function createSession({
         defaultTimeZone,
 
         /** Refuses a taken username, else probes it and queues the import, which runs in the background. */
-        async addListener({ username: typed, apiKey, timeZone }: ImportRequest): Promise<void> {
-            const id = listenerId(typed);
-            if (isTaken(id)) {
-                dispatch({ type: "taken", username: typed });
-                return;
-            }
-            // An unfinished Listener added again keeps the name they were first added under.
-            const known = storedListener(id);
-            const username = known?.username ?? typed;
-            if (!dispatch({ type: "submitted" })) return;
-            const result = await ingest.probe(username, apiKey);
-            dispatch({ type: "probed", username, result });
-            if (store.getState().screen.kind !== "importing") return;
-            settings.update({ apiKey });
-            followScreen();
-            void ingest.enqueueImport({ username, apiKey, timeZone });
-            if (known) {
-                await db.updateListener(id, { lastViewedAt: now() });
-                await reload();
-            }
-        },
+        addListener: guarded(
+            "Couldn't add the Listener",
+            async function addListener({
+                username: typed,
+                apiKey,
+                timeZone,
+            }: ImportRequest): Promise<void> {
+                const id = listenerId(typed);
+                if (isTaken(id)) {
+                    dispatch({ type: "taken", username: typed });
+                    return;
+                }
+                // An unfinished Listener added again keeps the name they were first added under.
+                const known = storedListener(id);
+                const username = known?.username ?? typed;
+                if (!dispatch({ type: "submitted" })) return;
+                const result = await ingest.probe(username, apiKey);
+                dispatch({ type: "probed", username, result });
+                if (store.getState().screen.kind !== "importing") return;
+                settings.update({ apiKey });
+                followScreen();
+                void ingest.enqueueImport({ username, apiKey, timeZone });
+                if (known) {
+                    await db.updateListener(id, { lastViewedAt: now() });
+                    await reload();
+                }
+            },
+        ),
 
-        open,
+        open: guarded("Couldn't open the Listener", open),
 
         /** Shows setup to add another Listener. */
         startAdding: (): void => void dispatch({ type: "addingStarted" }),
 
         /** Leaves setup for the Listener viewed most recently. */
-        async cancelAdding(): Promise<void> {
+        cancelAdding: guarded("Couldn't open the Listener", async () => {
             const previous =
                 mostRecentlyViewed(store.getState().listeners)?.id ??
                 queuedImportBesides()?.listenerId;
             if (previous) await open(previous);
-        },
+        }),
 
         /** How many Scrobbles are stored for a Listener, for the removal prompt. */
-        scrobbleCount: (id: ListenerId): Promise<number> => db.countScrobblesOf(id),
+        scrobbleCount: (id: ListenerId): Promise<number | undefined> =>
+            db.countScrobblesOf(id).catch((error: unknown) => {
+                failures.report("Couldn't count the Scrobbles", error);
+                return undefined;
+            }),
 
         /** Removes a Listener's jobs and Scrobbles; if in view, opens the next most recently viewed. */
-        async removeListener(id: ListenerId): Promise<void> {
+        removeListener: guarded("Couldn't remove the Listener", async (id: ListenerId) => {
             const next = mostRecentlyViewed(
                 store.getState().listeners.filter((listener) => listener.id !== id),
             );
@@ -401,12 +437,12 @@ export function createSession({
             }
             await ingest.removeListener(id);
             await reload();
-        },
+        }),
 
-        resumeImport,
+        resumeImport: guarded("Couldn't resume the import", resumeImport),
 
         /** Probes a new API key against the current Listener, saving it and resuming their import only if last.fm takes it. */
-        async changeApiKey(apiKey: string): Promise<void> {
+        changeApiKey: guarded("Couldn't change the API key", async (apiKey: string) => {
             const username = currentUsername();
             if (!username || !dispatch({ type: "keySubmitted", apiKey })) return;
             const result = await ingest.probe(username, apiKey);
@@ -414,7 +450,7 @@ export function createSession({
             if (store.getState().apiKeyCheck.kind !== "saved") return;
             settings.update({ apiKey });
             await resumeImport();
-        },
+        }),
 
         /** Queues a Sync of the dashboard's Listener with the stored API key. */
         sync(): void {
@@ -427,20 +463,27 @@ export function createSession({
         },
 
         /** Pins an Artist, by name, for the dashboard's Listener. */
-        pin: (artist: string): Promise<void> => changePins((pins) => withPin(pins, artist)),
+        pin: guarded("Couldn't pin the Artist", (artist: string) =>
+            changePins((pins) => withPin(pins, artist)),
+        ),
 
         /** Unpins an Artist, by name, for the dashboard's Listener. */
-        unpin: (artist: string): Promise<void> => changePins((pins) => withoutPin(pins, artist)),
+        unpin: guarded("Couldn't unpin the Artist", (artist: string) =>
+            changePins((pins) => withoutPin(pins, artist)),
+        ),
 
         /** Moves the current Listener's Days to `timeZone`, rebuilding the tables from what is stored. */
-        async changeTimeZone(timeZone: string): Promise<void> {
+        changeTimeZone: guarded("Couldn't change the timezone", async (timeZone: string) => {
             const listener = currentListener();
             if (!listener || listener.timeZone === timeZone) return;
             await db.updateListener(listener.id, { timeZone });
             if (dispatch({ type: "listenerChanged", listener: { ...listener, timeZone } }))
                 showCurrent();
             await reload();
-        },
+        }),
+
+        /** Stops reacting to settled jobs. */
+        dispose: stopListening,
     };
 }
 
