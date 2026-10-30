@@ -1,7 +1,8 @@
 import * as Comlink from "comlink";
 import { createContext, useContext, useEffect } from "react";
 import { createStore, useStore, type StoreApi } from "zustand";
-import type { AppSettings, ListenerId } from "../db";
+import type { ListenerId } from "../db";
+import type { AppSettings } from "../settings";
 import type { Subscriber } from "../events";
 import type { IngestEvents } from "../ingest";
 import { firstDayShift, type DayWindow, type StandingsTables } from "../standings";

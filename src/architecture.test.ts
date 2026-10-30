@@ -11,7 +11,18 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { expect, test } from "vitest";
 
 /** The modules, lowest first: each may import only those before it. */
-const MODULES = ["events", "ui", "lastfm", "db", "ingest", "standings", "timeline", "chart", "app"];
+const MODULES = [
+    "events",
+    "ui",
+    "lastfm",
+    "settings",
+    "db",
+    "ingest",
+    "standings",
+    "timeline",
+    "chart",
+    "app",
+];
 
 function sourceFiles(dir: string): string[] {
     return readdirSync(dir).flatMap((name) => {

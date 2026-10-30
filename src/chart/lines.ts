@@ -7,7 +7,7 @@ import {
     line,
     type CurveFactory,
 } from "d3-shape";
-import type { BelowTopX, LineShape } from "../db";
+import type { BelowTopX, LineShape } from "../settings";
 import { UNRANKED, valueAt, type StandingsTables } from "../standings";
 import { dailySegments, sCurveSegments, standingLevel, yAlong, type Point } from "./geometry";
 

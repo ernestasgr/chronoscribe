@@ -11,9 +11,9 @@ import {
     searchArtists,
     topX,
     valueAt,
-    type LinesRule,
     type StandingsTables,
 } from ".";
+import type { LinesRule } from "../settings";
 
 const uts = (iso: string) => Date.parse(iso) / 1000;
 const scrobble = (iso: string, artist: string) => ({ uts: uts(iso), artist });

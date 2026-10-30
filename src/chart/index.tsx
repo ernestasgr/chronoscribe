@@ -3,7 +3,7 @@ import { select } from "d3-selection";
 import { zoom, zoomIdentity, type ZoomBehavior } from "d3-zoom";
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type RefObject } from "react";
 import { createStore, useStore, type StoreApi } from "zustand";
-import type { AppSettings } from "../db";
+import type { AppSettings } from "../settings";
 import {
     dayDate,
     daysOutsideTopX,

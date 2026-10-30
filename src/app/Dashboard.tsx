@@ -10,7 +10,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { z } from "zod";
 import { useShallow } from "zustand/react/shallow";
 import { Chart, Minimap, type ChartOptions } from "../chart";
-import { SECONDS_PER_DAY, SecondsPerDay, STEP_DAYS, StepDays, type ListenerRow } from "../db";
+import type { ListenerRow } from "../db";
+import {
+    SECONDS_PER_DAY,
+    SecondsPerDay,
+    STEP_DAYS,
+    StepDays,
+    TOP_X,
+    TopXSize,
+    type ClimbersMode,
+} from "../settings";
 import { isSettled } from "../ingest";
 import {
     climbers,
@@ -21,7 +30,6 @@ import {
     resolvePins,
     topX,
     type Climber,
-    type ClimbersMode,
     type PinnedArtist,
     type StandingsTables,
 } from "../standings";
@@ -57,8 +65,6 @@ import { count, MINUTE_MS, syncAge, useNow } from "./labels";
 import { ListenerMenu } from "./ListenerMenu";
 import { Pins } from "./Pins";
 import { useQueue, useServices, useSettings } from "./services";
-
-const validX = (value: number) => Number.isInteger(value) && value >= 1 && value <= 100;
 
 /** The step sizes offered as presets, by label. */
 const STEP_PRESETS: readonly (readonly [label: string, days: number])[] = [
@@ -226,13 +232,13 @@ function Toolbar({
                 <Input
                     id="top-x"
                     type="number"
-                    min={1}
-                    max={100}
+                    min={TOP_X.min}
+                    max={TOP_X.max}
                     value={x}
                     className="w-20"
                     onChange={(e) => {
-                        const value = Number(e.target.value);
-                        if (validX(value)) settings.update({ x: value });
+                        const typed = TopXSize.safeParse(Number(e.target.value));
+                        if (typed.success) settings.update({ x: typed.data });
                     }}
                 />
             </div>

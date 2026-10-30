@@ -1,5 +1,6 @@
 import { createStore, type StoreApi } from "zustand";
-import type { AppSettings, Db } from "../db";
+import type { Db } from "../db";
+import type { AppSettings } from "../settings";
 import type { Failures } from "./failures";
 
 /** The app-wide settings, hydrated from Dexie and written back to it on every change. */

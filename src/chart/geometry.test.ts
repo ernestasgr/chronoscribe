@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { BelowTopX } from "../db";
+import type { BelowTopX } from "../settings";
 import { dailySegments, sCurveSegments, spreadLabels, standingLevel, yAlong } from "./geometry";
 
 // With X = 10 and 1,000 Artists.

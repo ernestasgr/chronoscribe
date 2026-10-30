@@ -1,4 +1,4 @@
-import type { BelowTopX } from "../db";
+import type { BelowTopX } from "../settings";
 
 export type Point = [x: number, y: number];
 

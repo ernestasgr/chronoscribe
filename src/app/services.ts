@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react";
 import { useStore } from "zustand";
-import type { AppSettings } from "../db";
+import type { AppSettings } from "../settings";
 import type { Ingest, IngestState } from "../ingest";
 import type { Failures, FailuresState } from "./failures";
 import type { Session, SessionState } from "./session";

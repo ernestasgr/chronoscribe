@@ -1,4 +1,4 @@
-import type { ClimbersMode, LinesRule, YAxis } from "../db";
+import type { ClimbersMode, LinesRule, YAxis } from "../settings";
 
 /** The Standing stored for an Artist who has no Scrobbles yet on a Day. */
 export const UNRANKED = 0xffff;
@@ -183,8 +183,6 @@ export interface Climber {
     dailyPlays: number;
 }
 
-export type { ClimbersMode };
-
 export interface ClimbersReport {
     listed: Climber[];
     /** In "fold" mode, the Climbers finishing beyond Top `beyond`, when there are any. */
@@ -250,8 +248,6 @@ export function climbers(
     };
 }
 
-export type { LinesRule, YAxis };
-
 /** A span of fractional Days. */
 export interface DayWindow {
     start: number;
@@ -263,7 +259,6 @@ const WARM_UP_DAYS = 30;
 /** The Days in the Top X within the window that the "seven-days" rule asks of an Artist. */
 const SEVEN_DAYS = 7;
 
-// The last drawn lines for each tables object, keyed on everything that decides them.
 // The last drawn lines for each tables object, keyed on everything that decides them.
 const drawnLinesMemo = new WeakMap<StandingsTables, { key: string; lines: readonly number[] }>();
 
