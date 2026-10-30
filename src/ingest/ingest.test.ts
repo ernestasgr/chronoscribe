@@ -235,6 +235,33 @@ describe("the Import job", () => {
         expect(changed).toEqual([]);
     });
 
+    test.each([
+        [
+            "a page count that isn't a number",
+            { recenttracks: { track: [], "@attr": { page: "x" } } },
+        ],
+        [
+            "a Scrobble with no artist",
+            {
+                recenttracks: {
+                    track: [{ name: "t", album: { "#text": "a" }, date: { uts: "1" } }],
+                    "@attr": { page: "1", perPage: "1000", totalPages: "1", total: "1" },
+                },
+            },
+        ],
+        ["a body that isn't an object", "Bad gateway"],
+    ])(
+        "a malformed page (%s) pauses at once with a Hard error, storing nothing",
+        async (_, body) => {
+            const { ingest, requests } = setUp([bristol], () => ({ status: 200, body }));
+            const job = await ingest.enqueueImport(request("Bristol"));
+
+            expect(job).toMatchObject({ status: "paused", error: { kind: "Hard" } });
+            expect(requests).toHaveLength(1);
+            expect(await db.scrobblesOf(BRISTOL)).toEqual([]);
+        },
+    );
+
     test.each([6, 10, 17])(
         "a Hard error %i mid-run pauses at once, keeping the pages stored before it",
         async (code) => {
