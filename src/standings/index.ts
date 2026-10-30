@@ -388,8 +388,13 @@ const artistIdsMemo = new WeakMap<StandingsTables, ReadonlyMap<string, ArtistId>
 const indexByName = (tables: StandingsTables): ReadonlyMap<string, ArtistId> =>
     new Map(tables.artists.map((artist, id) => [artist, artistId(id)]));
 
-const artistIdsOf = (tables: StandingsTables): ReadonlyMap<string, ArtistId> =>
-    artistIdsMemo.get(tables) ?? artistIdsMemo.set(tables, indexByName(tables)).get(tables)!;
+function artistIdsOf(tables: StandingsTables): ReadonlyMap<string, ArtistId> {
+    const known = artistIdsMemo.get(tables);
+    if (known) return known;
+    const ids = indexByName(tables);
+    artistIdsMemo.set(tables, ids);
+    return ids;
+}
 
 /** The Artist named exactly `name` in `tables`, if there is one. */
 export function artistNamed(tables: StandingsTables, name: string): PinnedArtist | undefined {

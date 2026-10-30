@@ -15,8 +15,13 @@ export type Subscriber<Events extends object> = Pick<EventBus<Events>, "on">;
 
 export function createEventBus<Events extends object>(): EventBus<Events> {
     const handlers = new Map<keyof Events, Set<Handler<never>>>();
-    const of = (type: keyof Events) =>
-        handlers.get(type) ?? handlers.set(type, new Set()).get(type)!;
+    const of = (type: keyof Events): Set<Handler<never>> => {
+        const existing = handlers.get(type);
+        if (existing) return existing;
+        const created = new Set<Handler<never>>();
+        handlers.set(type, created);
+        return created;
+    };
 
     return {
         emit: (type, payload) => of(type).forEach((handler) => handler(payload as never)),

@@ -203,4 +203,7 @@ export const mostScrobbles = (
     artists: readonly ArtistId[],
     day: DayIndex,
 ): number =>
-    artists.reduce((most, artist) => Math.max(most, valueAt(tables, artist, day, "scrobbles")!), 0);
+    artists.reduce(
+        (most, artist) => Math.max(most, valueAt(tables, artist, day, "scrobbles") ?? 0),
+        0,
+    );

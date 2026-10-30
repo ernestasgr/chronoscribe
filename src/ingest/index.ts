@@ -282,7 +282,12 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
 
     const dispatch = (id: number, event: JobEvent) =>
         store.setState(({ queue }) => ({ queue: withEvent(queue, id, event) }));
-    const jobOf = (id: number) => store.getState().queue.find((job) => job.id === id)!;
+    /** A queued job; jobs are never removed from the queue, so one missing is a bug. */
+    const jobOf = (id: number): Job => {
+        const job = store.getState().queue.find((queued) => queued.id === id);
+        if (!job) throw new Error(`Job ${id} is not in the queue`);
+        return job;
+    };
 
     /**
      * Fetches the page `request` describes, waiting out transient failures with backoff;

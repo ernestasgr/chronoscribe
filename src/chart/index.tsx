@@ -191,8 +191,13 @@ function useFrames(
         let frame: number | undefined;
         // Each name's rendered width, measured once per element since its text never changes.
         const nameWidths = new WeakMap<SVGTextElement, number>();
-        const widthOf = (name: SVGTextElement) =>
-            nameWidths.get(name) ?? nameWidths.set(name, name.getComputedTextLength()).get(name)!;
+        const widthOf = (name: SVGTextElement): number => {
+            const known = nameWidths.get(name);
+            if (known !== undefined) return known;
+            const width = name.getComputedTextLength();
+            nameWidths.set(name, width);
+            return width;
+        };
         // Ticks laid out from older tables would keep their old dates.
         if (timeAxis.current) select(timeAxis.current).selectAll("text").remove();
 
