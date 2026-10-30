@@ -3,6 +3,18 @@ import type { ClimbersMode, LinesRule, YAxis } from "../settings";
 /** The Standing stored for an Artist who has no Scrobbles yet on a Day. */
 export const UNRANKED = 0xffff;
 
+/** A whole Day of the tables, counted from the Day of the first Scrobble. */
+export type DayIndex = number & { readonly brand: "DayIndex" };
+
+/** Brands a whole number of Days since the tables' first Day. */
+export const dayIndex = (day: number): DayIndex => day as DayIndex;
+
+/** An Artist's index in the tables' `artists`. */
+export type ArtistId = number & { readonly brand: "ArtistId" };
+
+/** Brands an index into the tables' `artists`. */
+export const artistId = (index: number): ArtistId => index as ArtistId;
+
 export interface StandingsTables {
     /** Artist names; an Artist's index here is its artist id. */
     artists: string[];
@@ -17,7 +29,7 @@ export interface StandingsTables {
 }
 
 export interface TopXRow {
-    id: number;
+    id: ArtistId;
     artist: string;
     standing: number;
     cumulative: number;
@@ -130,7 +142,7 @@ function compareNames(a: string, b: string): number {
 }
 
 /** The ISO date of a Day. */
-export function dayDate(tables: StandingsTables, day: number): string {
+export function dayDate(tables: StandingsTables, day: DayIndex): string {
     const first = Date.parse(tables.firstDay.date) / 1000 / DAY_SECONDS;
     return isoDate(first + day);
 }
@@ -140,7 +152,7 @@ export const firstDayShift = (from: StandingsTables, to: StandingsTables): numbe
     (Date.parse(to.firstDay.date) - Date.parse(from.firstDay.date)) / 1000 / DAY_SECONDS;
 
 /** The X Artists with the best Standings on `day`. */
-export function topX(tables: StandingsTables, day: number, x: number): TopXRow[] {
+export function topX(tables: StandingsTables, day: DayIndex, x: number): TopXRow[] {
     const artistCount = tables.artists.length;
     const base = day * artistCount;
     const rows: TopXRow[] = [];
@@ -148,7 +160,7 @@ export function topX(tables: StandingsTables, day: number, x: number): TopXRow[]
         const id = tables.rankOrder[base + rank]!;
         if (id === UNRANKED) break;
         rows.push({
-            id,
+            id: artistId(id),
             artist: tables.artists[id]!,
             standing: rank + 1,
             cumulative: tables.cumulative[base + id]!,
@@ -158,22 +170,22 @@ export function topX(tables: StandingsTables, day: number, x: number): TopXRow[]
 }
 
 /** An Artist's Scrobbles within `day`. */
-export function dailyPlays(tables: StandingsTables, day: number, artist: number): number {
+export function dailyPlays(tables: StandingsTables, day: DayIndex, artist: ArtistId): number {
     const artistCount = tables.artists.length;
     const today = tables.cumulative[day * artistCount + artist]!;
     return day === 0 ? today : today - tables.cumulative[(day - 1) * artistCount + artist]!;
 }
 
 /** Every Scrobble within `day`, across all Artists. */
-export function dayScrobbles(tables: StandingsTables, day: number): number {
+export function dayScrobbles(tables: StandingsTables, day: DayIndex): number {
     let total = 0;
     for (let artist = 0; artist < tables.artists.length; artist++)
-        total += dailyPlays(tables, day, artist);
+        total += dailyPlays(tables, day, artistId(artist));
     return total;
 }
 
 export interface Climber {
-    id: number;
+    id: ArtistId;
     artist: string;
     standing: number;
     /** The previous Day's Standing, or undefined for a debut. */
@@ -198,7 +210,7 @@ export const climbersCut = (x: number): number => Math.max(50, 5 * x);
  */
 export function climbers(
     tables: StandingsTables,
-    day: number,
+    day: DayIndex,
     mode: ClimbersMode,
     x: number,
 ): ClimbersReport {
@@ -221,14 +233,15 @@ export function climbers(
         const debut = before === UNRANKED;
         const gain = (debut ? previouslyRanked + 1 : before) - standing;
         if (gain <= 0) continue;
+        const artist = artistId(id);
         rows.push({
-            id,
+            id: artist,
             artist: tables.artists[id]!,
             standing,
             previous: debut ? undefined : before,
             gain,
             debut,
-            dailyPlays: dailyPlays(tables, day, id),
+            dailyPlays: dailyPlays(tables, day, artist),
         });
     }
     rows.sort((a, b) => b.gain - a.gain || a.standing - b.standing);
@@ -260,7 +273,7 @@ const WARM_UP_DAYS = 30;
 const SEVEN_DAYS = 7;
 
 // The last drawn lines for each tables object, keyed on everything that decides them.
-const drawnLinesMemo = new WeakMap<StandingsTables, { key: string; lines: readonly number[] }>();
+const drawnLinesMemo = new WeakMap<StandingsTables, { key: string; lines: readonly ArtistId[] }>();
 
 /**
  * The ids of the Artists the chart draws a line for over `window`, in ascending order, plus the
@@ -275,8 +288,8 @@ export function drawnLines(
     window: DayWindow,
     x: number,
     rule: LinesRule,
-    pinned: readonly number[],
-): readonly number[] {
+    pinned: readonly ArtistId[],
+): readonly ArtistId[] {
     const first = Math.max(0, Math.ceil(window.start));
     const last = Math.min(tables.dayCount - 1, Math.floor(window.end));
     const key = [first, last, x, rule, pinned.toSorted((a, b) => a - b).join()].join("|");
@@ -314,8 +327,8 @@ function linesOver(
     tables: StandingsTables,
     { first, last, days }: LinesSpan,
     x: number,
-    pinned: readonly number[],
-): readonly number[] {
+    pinned: readonly ArtistId[],
+): readonly ArtistId[] {
     const artistCount = tables.artists.length;
     const daysIn = new Map<number, number>();
     for (let day = first; day <= last; day++)
@@ -324,16 +337,16 @@ function linesOver(
             if (id === UNRANKED) break;
             daysIn.set(id, (daysIn.get(id) ?? 0) + 1);
         }
-    const drawn = new Set<number>(pinned);
-    for (const [id, count] of daysIn) if (count >= days) drawn.add(id);
+    const drawn = new Set<ArtistId>(pinned);
+    for (const [id, count] of daysIn) if (count >= days) drawn.add(artistId(id));
     return [...drawn].toSorted((a, b) => a - b);
 }
 
 /** An Artist's Standing (undefined while unranked) or cumulative Scrobbles at the end of `day`. */
 export function valueAt(
     tables: StandingsTables,
-    artist: number,
-    day: number,
+    artist: ArtistId,
+    day: DayIndex,
     yAxis: YAxis,
 ): number | undefined {
     const index = day * tables.artists.length + artist;
@@ -345,12 +358,13 @@ export function valueAt(
 /** The runs of Days `from` through `to` on which `artist` is outside the Top X, unranked included. */
 export function daysOutsideTopX(
     tables: StandingsTables,
-    artist: number,
+    artist: ArtistId,
     x: number,
-    from: number,
-    to: number,
+    from: DayIndex,
+    to: DayIndex,
 ): DayWindow[] {
-    const outside = (day: number) => (valueAt(tables, artist, day, "standing") ?? x + 1) > x;
+    const outside = (day: number) =>
+        (valueAt(tables, artist, dayIndex(day), "standing") ?? x + 1) > x;
     return Array.from({ length: Math.max(0, to - from + 1) }, (_, i) => from + i).reduce<
         DayWindow[]
     >((runs, day) => {
@@ -364,17 +378,17 @@ export function daysOutsideTopX(
 
 /** A Pinned Artist found in the tables. */
 export interface PinnedArtist {
-    id: number;
+    id: ArtistId;
     artist: string;
 }
 
 // Each tables object's artist ids by name, built on the first lookup.
-const artistIdsMemo = new WeakMap<StandingsTables, ReadonlyMap<string, number>>();
+const artistIdsMemo = new WeakMap<StandingsTables, ReadonlyMap<string, ArtistId>>();
 
-const indexByName = (tables: StandingsTables): ReadonlyMap<string, number> =>
-    new Map(tables.artists.map((artist, id) => [artist, id]));
+const indexByName = (tables: StandingsTables): ReadonlyMap<string, ArtistId> =>
+    new Map(tables.artists.map((artist, id) => [artist, artistId(id)]));
 
-const artistIdsOf = (tables: StandingsTables): ReadonlyMap<string, number> =>
+const artistIdsOf = (tables: StandingsTables): ReadonlyMap<string, ArtistId> =>
     artistIdsMemo.get(tables) ?? artistIdsMemo.set(tables, indexByName(tables)).get(tables)!;
 
 /** The Artist named exactly `name` in `tables`, if there is one. */
@@ -394,7 +408,7 @@ export const resolvePins = (tables: StandingsTables, names: readonly string[]): 
 export function searchArtists(
     tables: StandingsTables,
     query: string,
-    day: number,
+    day: DayIndex,
     limit: number,
 ): string[] {
     const needle = query.trim().toLowerCase();

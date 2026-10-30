@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+    artistId,
     buildStandings,
     climbers,
     dailyPlays,
@@ -11,15 +12,20 @@ import {
     searchArtists,
     topX,
     valueAt,
+    dayIndex,
+    type ArtistId,
     type StandingsTables,
 } from ".";
 import type { LinesRule } from "../settings";
 
 const uts = (iso: string) => Date.parse(iso) / 1000;
 const scrobble = (iso: string, artist: string) => ({ uts: uts(iso), artist });
+/** The id of the Artist named `name`, -1 branded if there is none, as `indexOf` gives. */
+const artistIdOf = (tables: StandingsTables, name: string) =>
+    artistId(tables.artists.indexOf(name));
 const pad = (i: number) => String(i).padStart(2, "0");
 const artists = (rows: { artist: string }[] | undefined) => rows?.map((row) => row.artist);
-const names = (tables: StandingsTables, day: number) => artists(topX(tables, day, 10));
+const names = (tables: StandingsTables, day: number) => artists(topX(tables, dayIndex(day), 10));
 
 describe("buildStandings", () => {
     const timeZone = "Europe/Vilnius"; // UTC+3 in summer
@@ -34,26 +40,26 @@ describe("buildStandings", () => {
         ],
         { timeZone, today: uts("2026-07-04T12:00:00Z") },
     );
-    const [massiveAttack, portishead, tricky] = ["Massive Attack", "Portishead", "Tricky"].map(
-        (name) => tables.artists.indexOf(name),
-    ) as [number, number, number];
+    const massiveAttack = artistIdOf(tables, "Massive Attack");
+    const portishead = artistIdOf(tables, "Portishead");
+    const tricky = artistIdOf(tables, "Tricky");
 
     test("Days run from the first Scrobble's Day through today in the Listener's timezone", () => {
         expect(tables.dayCount).toBe(4);
         expect(tables.firstDay).toEqual({ date: "2026-07-01", timeZone });
-        expect(dayDate(tables, 0)).toBe("2026-07-01");
-        expect(dayDate(tables, 3)).toBe("2026-07-04");
+        expect(dayDate(tables, dayIndex(0))).toBe("2026-07-01");
+        expect(dayDate(tables, dayIndex(3))).toBe("2026-07-04");
     });
 
     test("Top X lists Artists by cumulative Scrobbles through the end of the Day", () => {
-        expect(topX(tables, 0, 10)).toMatchObject([
+        expect(topX(tables, dayIndex(0), 10)).toMatchObject([
             { artist: "Portishead", standing: 1, cumulative: 2 },
             { artist: "Massive Attack", standing: 2, cumulative: 1 },
         ]);
     });
 
     test("equal counts go to the Artist who reached that count first", () => {
-        expect(topX(tables, 1, 10)).toMatchObject([
+        expect(topX(tables, dayIndex(1), 10)).toMatchObject([
             { artist: "Portishead", standing: 1, cumulative: 2 },
             { artist: "Massive Attack", standing: 2, cumulative: 2 },
             { artist: "Tricky", standing: 3, cumulative: 1 },
@@ -61,36 +67,38 @@ describe("buildStandings", () => {
     });
 
     test("Top X is cut at X", () => {
-        expect(topX(tables, 1, 1)).toMatchObject([
+        expect(topX(tables, dayIndex(1), 1)).toMatchObject([
             { artist: "Portishead", standing: 1, cumulative: 2 },
         ]);
     });
 
     test("empty Days carry Standings forward", () => {
-        expect(topX(tables, 3, 10)).toEqual(topX(tables, 1, 10));
+        expect(topX(tables, dayIndex(3), 10)).toEqual(topX(tables, dayIndex(1), 10));
     });
 
     test("an Artist is unranked before their first Scrobble", () => {
-        expect(topX(tables, 0, 10).map((row) => row.artist)).not.toContain("Tricky");
-        expect(valueAt(tables, tricky, 0, "standing")).toBeUndefined();
-        expect(valueAt(tables, tricky, 0, "scrobbles")).toBe(0);
+        expect(topX(tables, dayIndex(0), 10).map((row) => row.artist)).not.toContain("Tricky");
+        expect(valueAt(tables, tricky, dayIndex(0), "standing")).toBeUndefined();
+        expect(valueAt(tables, tricky, dayIndex(0), "scrobbles")).toBe(0);
     });
 
     test("valueAt reads an Artist's Standing or cumulative Scrobbles on a Day", () => {
-        expect(valueAt(tables, tricky, 1, "standing")).toBe(3);
-        expect(valueAt(tables, tricky, 3, "standing")).toBe(3);
-        expect(valueAt(tables, portishead, 3, "scrobbles")).toBe(2);
+        expect(valueAt(tables, tricky, dayIndex(1), "standing")).toBe(3);
+        expect(valueAt(tables, tricky, dayIndex(3), "standing")).toBe(3);
+        expect(valueAt(tables, portishead, dayIndex(3), "scrobbles")).toBe(2);
     });
 
     test("Daily plays count an Artist's Scrobbles within one Day", () => {
-        expect(dailyPlays(tables, 0, portishead)).toBe(2);
-        expect(dailyPlays(tables, 1, massiveAttack)).toBe(1);
-        expect(dailyPlays(tables, 1, portishead)).toBe(0);
-        expect(dailyPlays(tables, 2, tricky)).toBe(0);
+        expect(dailyPlays(tables, dayIndex(0), portishead)).toBe(2);
+        expect(dailyPlays(tables, dayIndex(1), massiveAttack)).toBe(1);
+        expect(dailyPlays(tables, dayIndex(1), portishead)).toBe(0);
+        expect(dailyPlays(tables, dayIndex(2), tricky)).toBe(0);
     });
 
     test("a Day's Scrobbles total every Artist's Daily plays", () => {
-        expect([0, 1, 2, 3].map((day) => dayScrobbles(tables, day))).toEqual([3, 2, 0, 0]);
+        expect([0, 1, 2, 3].map((day) => dayScrobbles(tables, dayIndex(day)))).toEqual([
+            3, 2, 0, 0,
+        ]);
     });
 });
 
@@ -159,7 +167,7 @@ describe("Climbers", () => {
     );
 
     test("are ranked by positions gained since the previous Day", () => {
-        expect(climbers(tables, 1, "all", 10).listed).toMatchObject([
+        expect(climbers(tables, dayIndex(1), "all", 10).listed).toMatchObject([
             { artist: "C", standing: 1, previous: 3, gain: 2, debut: false, dailyPlays: 3 },
             { artist: "D", standing: 3, gain: 1, debut: true, dailyPlays: 3 },
         ]);
@@ -167,17 +175,19 @@ describe("Climbers", () => {
 
     test("a debut climbs from just below the previous Day's last ranked Artist", () => {
         // Three were ranked on 1 July, so D debuting at #3 gains 4 − 3, and E at #5 gains nothing.
-        const debut = climbers(tables, 1, "all", 10).listed.find((row) => row.artist === "D");
+        const debut = climbers(tables, dayIndex(1), "all", 10).listed.find(
+            (row) => row.artist === "D",
+        );
         expect(debut).toMatchObject({ gain: 1, debut: true });
         expect(debut?.previous).toBeUndefined();
     });
 
     test("a Day without Scrobbles has no Climbers", () => {
-        expect(climbers(tables, 2, "all", 10).listed).toEqual([]);
+        expect(climbers(tables, dayIndex(2), "all", 10).listed).toEqual([]);
     });
 
     test("the first Day has no Climbers", () => {
-        expect(climbers(tables, 0, "all", 10).listed).toEqual([]);
+        expect(climbers(tables, dayIndex(0), "all", 10).listed).toEqual([]);
     });
 });
 
@@ -200,7 +210,7 @@ describe("Climbers modes", () => {
     );
 
     test("all (raw) lists every Climber", () => {
-        const report = climbers(tables, 1, "all", 10);
+        const report = climbers(tables, dayIndex(1), "all", 10);
         expect(report.listed).toMatchObject([
             { artist: "Big 54", standing: 1, gain: 54 },
             { artist: "Tail 08", standing: 56, gain: 8, dailyPlays: 2 },
@@ -210,10 +220,10 @@ describe("Climbers modes", () => {
     });
 
     test("within Top max(50, 5X) drops Climbers finishing beyond it", () => {
-        const report = climbers(tables, 1, "within", 10);
+        const report = climbers(tables, dayIndex(1), "within", 10);
         expect(artists(report.listed)).toEqual(["Big 54"]);
         expect(report.folded).toBeUndefined();
-        expect(artists(climbers(tables, 1, "within", 12).listed)).toEqual([
+        expect(artists(climbers(tables, dayIndex(1), "within", 12).listed)).toEqual([
             "Big 54",
             "Tail 08",
             "Tail 09",
@@ -221,14 +231,14 @@ describe("Climbers modes", () => {
     });
 
     test("fold long tail folds Climbers beyond Top max(50, 5X) into a summary", () => {
-        const report = climbers(tables, 1, "fold", 10);
+        const report = climbers(tables, dayIndex(1), "fold", 10);
         expect(artists(report.listed)).toEqual(["Big 54"]);
         expect(report.folded).toMatchObject({ beyond: 50, singlePlay: 1 });
         expect(artists(report.folded?.climbers)).toEqual(["Tail 08", "Tail 09"]);
     });
 
     test("fold long tail has no summary when nothing is beyond the cut", () => {
-        expect(climbers(tables, 1, "fold", 12).folded).toBeUndefined();
+        expect(climbers(tables, dayIndex(1), "fold", 12).folded).toBeUndefined();
     });
 });
 
@@ -241,9 +251,9 @@ describe("Days at an offset that isn't a whole quarter-hour", () => {
 
     test("Scrobbles either side of local midnight land on different Days", () => {
         expect(tables.firstDay.date).toBe("1969-12-31");
-        expect([0, 1].map((day) => dailyPlays(tables, day, tables.artists.indexOf("Air")))).toEqual(
-            [1, 1],
-        );
+        expect(
+            [0, 1].map((day) => dailyPlays(tables, dayIndex(day), artistIdOf(tables, "Air"))),
+        ).toEqual([1, 1]);
     });
 });
 
@@ -262,20 +272,20 @@ describe("Days in the Listener's timezone", () => {
         ],
         { timeZone, today: uts("2026-11-02T12:00:00Z") },
     );
-    const air = tables.artists.indexOf("Air");
+    const air = artistIdOf(tables, "Air");
     const dayOf = (date: string) =>
         (Date.parse(date) - Date.parse(tables.firstDay.date)) / 86_400_000;
 
     test("Days run from the first Scrobble's local Day through today", () => {
         expect(tables.firstDay).toEqual({ date: "2026-03-07", timeZone });
-        expect(dayDate(tables, tables.dayCount - 1)).toBe("2026-11-02");
+        expect(dayDate(tables, dayIndex(tables.dayCount - 1))).toBe("2026-11-02");
     });
 
     test("Scrobbles land on their local Day across both DST changes", () => {
-        expect(valueAt(tables, air, dayOf("2026-03-07"), "scrobbles")).toBe(1);
-        expect(valueAt(tables, air, dayOf("2026-03-08"), "scrobbles")).toBe(2);
-        expect(valueAt(tables, air, dayOf("2026-10-31"), "scrobbles")).toBe(2);
-        expect(valueAt(tables, air, dayOf("2026-11-01"), "scrobbles")).toBe(4);
+        expect(valueAt(tables, air, dayIndex(dayOf("2026-03-07")), "scrobbles")).toBe(1);
+        expect(valueAt(tables, air, dayIndex(dayOf("2026-03-08")), "scrobbles")).toBe(2);
+        expect(valueAt(tables, air, dayIndex(dayOf("2026-10-31")), "scrobbles")).toBe(2);
+        expect(valueAt(tables, air, dayIndex(dayOf("2026-11-01")), "scrobbles")).toBe(4);
     });
 });
 
@@ -292,12 +302,12 @@ describe("drawnLines", () => {
         ],
         { timeZone: "UTC", today: uts("2026-03-02T12:00:00Z") },
     );
-    const idOf = (name: string) => tables.artists.indexOf(name);
+    const idOf = (name: string) => artistIdOf(tables, name);
     const lines = (
         start: number,
         end: number,
         x = 1,
-        pinned: number[] = [],
+        pinned: ArtistId[] = [],
         rule: LinesRule = "warm-up",
     ) =>
         drawnLines(tables, { start, end }, x, rule, pinned)
@@ -341,7 +351,7 @@ describe("drawnLines", () => {
     });
 
     const outside = (name: string, from: number, to: number, x = 1) =>
-        daysOutsideTopX(tables, idOf(name), x, from, to);
+        daysOutsideTopX(tables, idOf(name), x, dayIndex(from), dayIndex(to));
 
     test("a Pinned Artist is outside the Top X on runs of Days, unranked Days included", () => {
         expect(outside("Early", 30, 40)).toEqual([{ start: 35, end: 40 }]);
@@ -395,20 +405,23 @@ describe("Pinned Artists", () => {
         expect(
             resolvePins(tables, ["Tricky", "Burial", "massive attack", "Massive Attack"]),
         ).toEqual([
-            { id: tables.artists.indexOf("Tricky"), artist: "Tricky" },
-            { id: tables.artists.indexOf("Massive Attack"), artist: "Massive Attack" },
+            { id: artistIdOf(tables, "Tricky"), artist: "Tricky" },
+            { id: artistIdOf(tables, "Massive Attack"), artist: "Massive Attack" },
         ]);
     });
 
     test("search matches any part of a name in any case, best Standing on the Day first", () => {
         // On 1 July Portishead lead Massive Attack, and Tricky is unranked until 2 July.
-        expect(searchArtists(tables, "T", 0, 10)).toEqual([
+        expect(searchArtists(tables, "T", dayIndex(0), 10)).toEqual([
             "Portishead",
             "Massive Attack",
             "Tricky",
         ]);
-        expect(searchArtists(tables, "tt", 0, 10)).toEqual(["Massive Attack"]);
-        expect(searchArtists(tables, "t", 0, 2)).toEqual(["Portishead", "Massive Attack"]);
-        expect(searchArtists(tables, "  ", 0, 10)).toEqual([]);
+        expect(searchArtists(tables, "tt", dayIndex(0), 10)).toEqual(["Massive Attack"]);
+        expect(searchArtists(tables, "t", dayIndex(0), 2)).toEqual([
+            "Portishead",
+            "Massive Attack",
+        ]);
+        expect(searchArtists(tables, "  ", dayIndex(0), 10)).toEqual([]);
     });
 });

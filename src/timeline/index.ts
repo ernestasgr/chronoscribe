@@ -5,7 +5,13 @@ import type { ListenerId } from "../db";
 import type { AppSettings } from "../settings";
 import type { Subscriber } from "../events";
 import type { IngestEvents } from "../ingest";
-import { firstDayShift, type DayWindow, type StandingsTables } from "../standings";
+import {
+    dayIndex,
+    firstDayShift,
+    type DayIndex,
+    type DayWindow,
+    type StandingsTables,
+} from "../standings";
 import type { StandingsWorker } from "./standings.worker";
 import { clamp, transition, withinHistory, type ViewEvent, type ViewState } from "./view";
 
@@ -225,7 +231,8 @@ export const useTables = (): StandingsTables | undefined => useTimelineState((s)
 export const useBuild = (): BuildStatus => useTimelineState((s) => s.build);
 
 /** The Focus Day: the Day nearest the playhead. */
-export const useFocusDay = (): number => useTimelineState((s) => Math.round(s.playhead));
+export const useFocusDay = (): DayIndex =>
+    useTimelineState((s) => dayIndex(Math.round(s.playhead)));
 
 /** Whether the history is playing. */
 export const usePlaying = (): boolean => useTimelineState((s) => s.motion.kind === "playing");

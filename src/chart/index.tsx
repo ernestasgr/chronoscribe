@@ -5,10 +5,14 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent, type RefObject }
 import { createStore, useStore, type StoreApi } from "zustand";
 import type { AppSettings } from "../settings";
 import {
+    artistId,
     dayDate,
+    dayIndex,
     daysOutsideTopX,
     drawnLines,
     topX,
+    type ArtistId,
+    type DayIndex,
     type DayWindow,
     type PinnedArtist,
     type StandingsTables,
@@ -53,11 +57,11 @@ const ARTIST_LABEL_PAD = 5;
 /** Where each Pinned Artist's line is dashed: across each Day from `from` to `to` they're outside the Top X. */
 const dashedSpans = (
     tables: StandingsTables,
-    pinned: readonly number[],
+    pinned: readonly ArtistId[],
     x: number,
     dayX: (day: number) => number,
-    from: number,
-    to: number,
+    from: DayIndex,
+    to: DayIndex,
 ): DashedSpans =>
     new Map(
         pinned.map((id) => [
@@ -156,8 +160,8 @@ export function Chart({
 }
 
 /** The Day the Scrobbles axis is fitted to: the playhead, kept within the Days drawn. */
-const fittedDay = (playhead: number, from: number, to: number) =>
-    Math.min(to, Math.max(from, Math.floor(playhead)));
+const fittedDay = (playhead: number, from: DayIndex, to: DayIndex): DayIndex =>
+    dayIndex(Math.min(to, Math.max(from, Math.floor(playhead))));
 
 /**
  * Paints whenever the view changes, at most once per frame: the lines on the canvas, stopping at
@@ -172,7 +176,7 @@ function useFrames(
     tables: StandingsTables,
     x: number,
     { yAxis, belowTopX, lineShape, linesDrawn, hideFuture }: ChartOptions,
-    pinned: readonly number[],
+    pinned: readonly ArtistId[],
     size: Size | undefined,
     scrobblesTop: ScrobblesTop,
 ) {
@@ -209,7 +213,7 @@ function useFrames(
             return max;
         };
 
-        const scaleOf = (artists: readonly number[], day: number, now: number): LinesScale =>
+        const scaleOf = (artists: readonly ArtistId[], day: DayIndex, now: number): LinesScale =>
             yAxis === "standing"
                 ? { yAxis, x, below: belowTopX, shape: lineShape, levelY }
                 : {
@@ -223,8 +227,8 @@ function useFrames(
         const draw = (now: number) => {
             const { window, playhead } = getView();
             const dayX = dayScale(window, plot);
-            const from = Math.max(0, Math.floor(window.start) - 1);
-            const to = Math.min(last, Math.ceil(hideFuture ? playhead : window.end) + 1);
+            const from = dayIndex(Math.max(0, Math.floor(window.start) - 1));
+            const to = dayIndex(Math.min(last, Math.ceil(hideFuture ? playhead : window.end) + 1));
             const artists = drawnLines(tables, window, x, linesDrawn, pinned);
             const scale = scaleOf(artists, fittedDay(playhead, from, to), now);
             const playheadX = dayX(playhead);
@@ -303,7 +307,7 @@ function placeTimeAxis(
             enter
                 .append("text")
                 .attr("text-anchor", "middle")
-                .text((day) => dayDate(tables, day)),
+                .text((day) => dayDate(tables, dayIndex(day))),
         )
         .attr("x", (day) => clampLabel(dayX(day), size))
         .attr("y", size.height - 8);
@@ -339,7 +343,7 @@ function placeLabels(
     const ys = items.map((item) =>
         playheadX === undefined
             ? undefined
-            : yOnLine(geometry, scale, Number(item.dataset.artist), playheadX),
+            : yOnLine(geometry, scale, artistId(Number(item.dataset.artist)), playheadX),
     );
     const spread = spreadLabels(
         ys.filter((y) => y !== undefined),
@@ -500,7 +504,7 @@ function Overlay({
 /** The Focus Day's Top X, then the Pinned Artists outside it. */
 const labelledArtists = (
     tables: StandingsTables,
-    day: number,
+    day: DayIndex,
     x: number,
     pins: readonly PinnedArtist[],
 ): PinnedArtist[] => {
@@ -520,7 +524,7 @@ function ArtistLabels({
     group,
 }: {
     tables: StandingsTables;
-    day: number;
+    day: DayIndex;
     x: number;
     pins: readonly PinnedArtist[];
     group: RefObject<SVGGElement | null>;

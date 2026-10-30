@@ -30,6 +30,7 @@ import {
     resolvePins,
     topX,
     type Climber,
+    type DayIndex,
     type PinnedArtist,
     type StandingsTables,
 } from "../standings";
@@ -197,7 +198,7 @@ function Toolbar({
 }: {
     listener: ListenerRow;
     tables: StandingsTables;
-    day: number;
+    day: DayIndex;
     x: number;
     mode: ClimbersMode;
     options: ChartOptions;
@@ -565,7 +566,7 @@ function OptionSelect<T extends string>({
     );
 }
 
-function TopX({ tables, day, x }: { tables: StandingsTables; day: number; x: number }) {
+function TopX({ tables, day, x }: { tables: StandingsTables; day: DayIndex; x: number }) {
     const rows = topX(tables, day, x).map((row) => ({
         ...row,
         dailyPlays: dailyPlays(tables, day, row.id),
@@ -617,7 +618,7 @@ function Climbers({
     mode,
 }: {
     tables: StandingsTables;
-    day: number;
+    day: DayIndex;
     x: number;
     mode: ClimbersMode;
 }) {
