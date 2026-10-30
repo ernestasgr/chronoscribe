@@ -176,7 +176,11 @@ const apiKeyCheckAfter = (check: ApiKeyCheck, event: SessionEvent): ApiKeyCheck 
 const upserted = (listeners: readonly ListenerRow[], listener: ListenerRow): ListenerRow[] =>
     byRecentView([...listeners.filter(({ id }) => id !== listener.id), listener]);
 
-/** The rows the events carry, as fresh as storage: they are written before they are dispatched. */
+/**
+ * The rows the events carry, as fresh as storage: they are written before they are dispatched. A
+ * removed Listener stays listed until their deletion is read back, so the list never runs ahead
+ * of what a reload would show.
+ */
 const listenersAfter = (
     listeners: readonly ListenerRow[],
     event: SessionEvent,
@@ -189,10 +193,6 @@ const listenersAfter = (
         case "listenerChanged":
             return listeners.some(({ id }) => id === event.listener.id)
                 ? upserted(listeners, event.listener)
-                : listeners;
-        case "removed":
-            return listeners.some(({ id }) => id === event.listenerId)
-                ? listeners.filter(({ id }) => id !== event.listenerId)
                 : listeners;
         default:
             return listeners;
