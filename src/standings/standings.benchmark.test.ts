@@ -4,6 +4,7 @@ import {
     climbers,
     dailyPlays,
     dayDate,
+    dayIndex,
     dayScrobbles,
     topX,
     type StandingsTables,
@@ -69,7 +70,8 @@ describe("benchmark on a history shaped like the measured one", () => {
 
     test("a Focus Day report takes under 5 ms", () => {
         const x = 10;
-        const report = (day: number) => {
+        const report = (n: number) => {
+            const day = dayIndex(n);
             dayDate(tables, day);
             dayScrobbles(tables, day);
             for (const row of topX(tables, day, x)) dailyPlays(tables, day, row.id);

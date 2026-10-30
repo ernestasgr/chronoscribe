@@ -34,12 +34,14 @@ export function dayScale({ start, end }: DayWindow, plot: Plot): ScaleLinear<num
 export function useSize(element: RefObject<HTMLElement | null>): Size | undefined {
     const [size, setSize] = useState<Size>();
     useEffect(() => {
+        const observed = element.current;
+        if (!observed) return;
         const observer = new ResizeObserver(([entry]) => {
             if (!entry) return;
             const { width, height } = entry.contentRect;
             setSize({ width, height });
         });
-        observer.observe(element.current!);
+        observer.observe(observed);
         return () => observer.disconnect();
     }, [element]);
     return size;

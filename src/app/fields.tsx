@@ -61,7 +61,11 @@ export const fieldOf = (problem: SetupProblem): ProblemField => PROBLEMS[problem
 const messageOf = <Kind extends SetupProblem["kind"]>(
     problem: ProblemOf<Kind>,
     username: string,
-): ReactNode => (PROBLEMS[problem.kind] as (typeof PROBLEMS)[Kind]).message(problem, username);
+): ReactNode => {
+    // cast: TypeScript can't tie `problem.kind` to the entry it indexes, so it widens `message`'s parameter.
+    const entry = PROBLEMS[problem.kind] as (typeof PROBLEMS)[Kind];
+    return entry.message(problem, username);
+};
 
 /** What `problem` tells the user, inline. */
 export function ProblemMessage({ problem, username }: { problem: SetupProblem; username: string }) {

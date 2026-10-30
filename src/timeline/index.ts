@@ -1,10 +1,17 @@
 import * as Comlink from "comlink";
 import { createContext, useContext, useEffect } from "react";
 import { createStore, useStore, type StoreApi } from "zustand";
-import type { AppSettings, ListenerId } from "../db";
+import type { ListenerId } from "../db";
+import type { AppSettings } from "../settings";
 import type { Subscriber } from "../events";
 import type { IngestEvents } from "../ingest";
-import { firstDayShift, type DayWindow, type StandingsTables } from "../standings";
+import {
+    dayIndex,
+    firstDayShift,
+    type DayIndex,
+    type DayWindow,
+    type StandingsTables,
+} from "../standings";
 import type { StandingsWorker } from "./standings.worker";
 import { clamp, transition, withinHistory, type ViewEvent, type ViewState } from "./view";
 
@@ -18,10 +25,17 @@ export interface ListenerRef {
     timeZone: string;
 }
 
+/** Where the latest build of the tables is: none under way, running, or failed. */
+export type BuildStatus =
+    | { kind: "idle" }
+    | { kind: "running" }
+    | { kind: "failed"; message: string };
+
 export interface TimelineState extends ViewState {
     /** The Listener whose tables the timeline holds. */
     listener: ListenerRef | undefined;
     tables: StandingsTables | undefined;
+    build: BuildStatus;
     /** The latest build started; an older build's result is dropped. */
     buildId: number;
 }
@@ -38,6 +52,7 @@ export type Playback = () => Pick<AppSettings, "secondsPerDay" | "stepDays">;
 const INITIAL: TimelineState = {
     listener: undefined,
     tables: undefined,
+    build: { kind: "idle" },
     buildId: 0,
     playhead: 0,
     window: { start: 0, end: 0 },
@@ -113,11 +128,20 @@ export function createTimeline({ build, events, now, requestFrame, playback }: T
     };
     const stopAnimating = store.subscribe(animate);
 
+    /** Builds the Listener's tables; never rejects, as a failure is kept in `build`. */
     async function rebuild(listener: ListenerRef): Promise<void> {
         const buildId = store.getState().buildId + 1;
-        store.setState({ buildId });
-        const tables = await build(listener, Math.floor(now() / 1000));
-        if (store.getState().buildId === buildId) store.setState((state) => swapIn(state, tables));
+        store.setState({ buildId, build: { kind: "running" } });
+        const built = await build(listener, Math.floor(now() / 1000)).then(
+            (tables) => ({ ok: true, tables }) as const,
+            (error: unknown) => ({ ok: false, message: String(error) }) as const,
+        );
+        if (store.getState().buildId !== buildId) return;
+        store.setState((state) =>
+            built.ok
+                ? { ...swapIn(state, built.tables), build: { kind: "idle" } }
+                : { build: { kind: "failed", message: built.message } },
+        );
     }
 
     /** Makes `listener` the one whose tables the timeline holds, rebuilding them. */
@@ -132,6 +156,12 @@ export function createTimeline({ build, events, now, requestFrame, playback }: T
         store.setState(({ buildId }) => ({ ...INITIAL, buildId: buildId + 1 }));
     }
 
+    /** Builds the held Listener's tables again, such as after a failed build. */
+    function retry(): void {
+        const { listener } = store.getState();
+        if (listener) void rebuild(listener);
+    }
+
     const dispose = events.on("scrobblesChanged", ({ listenerId }) => {
         const { listener } = store.getState();
         if (listener?.id === listenerId) void rebuild(listener);
@@ -141,6 +171,7 @@ export function createTimeline({ build, events, now, requestFrame, playback }: T
         store,
         show,
         clear,
+        retry,
         dispose: () => {
             dispose();
             stopAnimating();
@@ -196,8 +227,12 @@ const useTimelineState = <T>(select: (state: TimelineState) => T): T =>
 
 export const useTables = (): StandingsTables | undefined => useTimelineState((s) => s.tables);
 
+/** Where the latest build of the tables is. */
+export const useBuild = (): BuildStatus => useTimelineState((s) => s.build);
+
 /** The Focus Day: the Day nearest the playhead. */
-export const useFocusDay = (): number => useTimelineState((s) => Math.round(s.playhead));
+export const useFocusDay = (): DayIndex =>
+    useTimelineState((s) => dayIndex(Math.round(s.playhead)));
 
 /** Whether the history is playing. */
 export const usePlaying = (): boolean => useTimelineState((s) => s.motion.kind === "playing");

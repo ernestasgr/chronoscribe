@@ -7,6 +7,9 @@
     },
     "ignorePatterns": ["dist", ".scratch", ".claude"],
     "rules": {
-        "react/react-in-jsx-scope": "off"
+        "react/react-in-jsx-scope": "off",
+        "react/rules-of-hooks": "error",
+        "react/exhaustive-deps": "error",
+        "typescript/no-explicit-any": "error"
     }
 }

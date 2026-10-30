@@ -11,6 +11,7 @@ import {
     type ProbeResult,
 } from "../ingest";
 import type { Timeline } from "../timeline";
+import type { Failures } from "./failures";
 import type { Settings } from "./settings";
 
 /** Why setup shows a message: a taken username, a probe that turned it down, or an unfinished import. */
@@ -36,7 +37,7 @@ export type ApiKeyCheck =
 export type Screen =
     | { kind: "setup"; status: SetupStatus }
     | { kind: "importing"; listenerId: ListenerId; username: string }
-    | { kind: "dashboard"; listener: ListenerRow };
+    | { kind: "dashboard"; listenerId: ListenerId };
 
 export interface SessionState {
     screen: Screen;
@@ -92,14 +93,12 @@ const byRecentView = (listeners: readonly ListenerRow[]): ListenerRow[] =>
 /** A Listener's dashboard once their import has finished, their import's screen until then. */
 const screenOf = (listener: ListenerRow): Screen =>
     listener.importComplete
-        ? { kind: "dashboard", listener }
+        ? { kind: "dashboard", listenerId: listener.id }
         : { kind: "importing", listenerId: listener.id, username: listener.username };
 
 /** The Listener a screen is showing, if any. */
-const listenerOn = (screen: Screen): ListenerId | undefined => {
-    if (screen.kind === "dashboard") return screen.listener.id;
-    return screen.kind === "importing" ? screen.listenerId : undefined;
-};
+const listenerOn = (screen: Screen): ListenerId | undefined =>
+    screen.kind === "setup" ? undefined : screen.listenerId;
 
 /** Whether setup's form can be sent: it isn't already being checked. */
 const editable = (screen: Screen): boolean =>
@@ -145,7 +144,7 @@ const screenAfter = (screen: Screen, event: SessionEvent): Screen => {
             // A paused import stays behind its screen, which offers to resume it.
             if (job.status === "paused") return screen;
             return job.status === "done" && listener
-                ? { kind: "dashboard", listener }
+                ? { kind: "dashboard", listenerId: listener.id }
                 : setupScreen({
                       kind: "rejected",
                       problem: unfinished(job),
@@ -153,9 +152,6 @@ const screenAfter = (screen: Screen, event: SessionEvent): Screen => {
                   });
         }
         case "listenerChanged":
-            return screen.kind === "dashboard" && screen.listener.id === event.listener.id
-                ? { kind: "dashboard", listener: event.listener }
-                : screen;
         case "keySubmitted":
         case "keyProbed":
             return screen;
@@ -176,14 +172,48 @@ const apiKeyCheckAfter = (check: ApiKeyCheck, event: SessionEvent): ApiKeyCheck 
     }
 };
 
+/** The Listeners with `listener`'s row in place of the stored one, or added if new. */
+const upserted = (listeners: readonly ListenerRow[], listener: ListenerRow): ListenerRow[] =>
+    byRecentView([...listeners.filter(({ id }) => id !== listener.id), listener]);
+
+/**
+ * The rows the events carry, as fresh as storage: they are written before they are dispatched. A
+ * removed Listener stays listed until their deletion is read back, so the list never runs ahead
+ * of what a reload would show.
+ */
+const listenersAfter = (
+    listeners: readonly ListenerRow[],
+    event: SessionEvent,
+): readonly ListenerRow[] => {
+    switch (event.type) {
+        case "opened":
+            return upserted(listeners, event.listener);
+        case "jobSettled":
+            return event.listener ? upserted(listeners, event.listener) : listeners;
+        case "listenerChanged":
+            return listeners.some(({ id }) => id === event.listener.id)
+                ? upserted(listeners, event.listener)
+                : listeners;
+        default:
+            return listeners;
+    }
+};
+
 /** The session after `event`; an event the current state doesn't accept leaves it unchanged. */
 export function transition(state: SessionState, event: SessionEvent): SessionState {
     const screen = screenAfter(state.screen, event);
     const apiKeyCheck = apiKeyCheckAfter(state.apiKeyCheck, event);
-    return screen === state.screen && apiKeyCheck === state.apiKeyCheck
+    const listeners = listenersAfter(state.listeners, event);
+    return screen === state.screen &&
+        apiKeyCheck === state.apiKeyCheck &&
+        listeners === state.listeners
         ? state
-        : { ...state, screen, apiKeyCheck };
+        : { screen, apiKeyCheck, listeners };
 }
+
+/** The Listener the dashboard shows, looked up among the stored ones. */
+export const viewedListener = ({ screen, listeners }: SessionState): ListenerRow | undefined =>
+    screen.kind === "dashboard" ? listeners.find(({ id }) => id === screen.listenerId) : undefined;
 
 export interface SessionDeps {
     db: Db;
@@ -191,6 +221,8 @@ export interface SessionDeps {
     ingest: Ingest;
     timeline: Timeline;
     settings: Settings;
+    /** Where the failures of actions nobody awaits are reported. */
+    failures: Pick<Failures, "report">;
     /** Every stored Listener: the app opens on the most recently viewed, resuming unfinished imports. */
     listeners: readonly ListenerRow[];
     /** The browser's timezone, offered for new Listeners. */
@@ -206,6 +238,7 @@ export function createSession({
     ingest,
     timeline,
     settings,
+    failures,
     listeners,
     defaultTimeZone,
     now,
@@ -225,16 +258,12 @@ export function createSession({
         return store.getState() !== before;
     };
 
-    const currentListener = (): ListenerRow | undefined => {
-        const { screen } = store.getState();
-        return screen.kind === "dashboard" ? screen.listener : undefined;
-    };
+    const currentListener = (): ListenerRow | undefined => viewedListener(store.getState());
 
     /** The username Settings checks a new API key against: the dashboard's or the import's. */
     const currentUsername = (): string | undefined => {
         const { screen } = store.getState();
-        if (screen.kind === "dashboard") return screen.listener.username;
-        return screen.kind === "importing" ? screen.username : undefined;
+        return screen.kind === "importing" ? screen.username : currentListener()?.username;
     };
 
     /** Picks an unfinished import back up with the stored API key. */
@@ -261,8 +290,8 @@ export function createSession({
 
     /** Points the timeline at the screen's Listener: their tables on a dashboard, none elsewhere. */
     const followScreen = () => {
-        const { screen } = store.getState();
-        if (screen.kind === "dashboard") timeline.show(screen.listener);
+        const listener = currentListener();
+        if (listener) timeline.show(listener);
         else timeline.clear();
     };
 
@@ -272,6 +301,26 @@ export function createSession({
         const stored = await db.listeners();
         if (read === reads.latest) store.setState({ listeners: byRecentView(stored) });
     }
+
+    /** Applies a change to a stored row, dropping any read started before it as stale. */
+    const dispatchRow = (event: SessionEvent): boolean => {
+        reads.latest++;
+        return dispatch(event);
+    };
+
+    /**
+     * `action`, reporting a failure as `what` and reading the Listeners back rather than rejecting,
+     * since the UI calls it without awaiting.
+     */
+    const guarded =
+        <Args extends unknown[]>(what: string, action: (...args: Args) => Promise<void>) =>
+        (...args: Args): Promise<void> =>
+            action(...args).catch(async (error: unknown) => {
+                failures.report(what, error);
+                await reload().catch((reloadError: unknown) =>
+                    failures.report("Couldn't read the Listeners", reloadError),
+                );
+            });
 
     const storedListener = (id: ListenerId) =>
         store.getState().listeners.find((listener) => listener.id === id);
@@ -307,7 +356,7 @@ export function createSession({
             return;
         }
         const listener = { ...stored, lastViewedAt: now() };
-        dispatch({ type: "opened", listener });
+        dispatchRow({ type: "opened", listener });
         followScreen();
         await db.updateListener(id, { lastViewedAt: listener.lastViewedAt });
         await reload();
@@ -318,21 +367,20 @@ export function createSession({
         const listener = currentListener();
         if (!listener) return;
         const pinnedArtists = change(listener.pinnedArtists);
-        dispatch({ type: "listenerChanged", listener: { ...listener, pinnedArtists } });
+        dispatchRow({ type: "listenerChanged", listener: { ...listener, pinnedArtists } });
         await db.updateListener(listener.id, { pinnedArtists });
         await reload();
     }
 
-    events.on("jobSettled", async ({ job }) => {
+    const onJobSettled = guarded("Couldn't read the finished job's Listener", async (job: Job) => {
         const listener = job.status === "done" ? await db.listener(job.listenerId) : undefined;
-        void reload();
         // A Sync's new tables are already being built from its `scrobblesChanged`.
         if (job.kind === "sync") {
             if (listener) dispatch({ type: "listenerChanged", listener });
-            return;
-        }
-        if (dispatch({ type: "jobSettled", job, listener })) showCurrent();
+        } else if (dispatch({ type: "jobSettled", job, listener })) showCurrent();
+        await reload();
     });
+    const stopListening = events.on("jobSettled", ({ job }) => void onJobSettled(job));
 
     if (initial?.importComplete) timeline.show(initial);
     byRecentView(listeners)
@@ -345,46 +393,57 @@ export function createSession({
         defaultTimeZone,
 
         /** Refuses a taken username, else probes it and queues the import, which runs in the background. */
-        async addListener({ username: typed, apiKey, timeZone }: ImportRequest): Promise<void> {
-            const id = listenerId(typed);
-            if (isTaken(id)) {
-                dispatch({ type: "taken", username: typed });
-                return;
-            }
-            // An unfinished Listener added again keeps the name they were first added under.
-            const known = storedListener(id);
-            const username = known?.username ?? typed;
-            if (!dispatch({ type: "submitted" })) return;
-            const result = await ingest.probe(username, apiKey);
-            dispatch({ type: "probed", username, result });
-            if (store.getState().screen.kind !== "importing") return;
-            settings.update({ apiKey });
-            followScreen();
-            void ingest.enqueueImport({ username, apiKey, timeZone });
-            if (known) {
-                await db.updateListener(id, { lastViewedAt: now() });
-                await reload();
-            }
-        },
+        addListener: guarded(
+            "Couldn't add the Listener",
+            async function addListener({
+                username: typed,
+                apiKey,
+                timeZone,
+            }: ImportRequest): Promise<void> {
+                const id = listenerId(typed);
+                if (isTaken(id)) {
+                    dispatch({ type: "taken", username: typed });
+                    return;
+                }
+                // An unfinished Listener added again keeps the name they were first added under.
+                const known = storedListener(id);
+                const username = known?.username ?? typed;
+                if (!dispatch({ type: "submitted" })) return;
+                const result = await ingest.probe(username, apiKey);
+                dispatch({ type: "probed", username, result });
+                if (store.getState().screen.kind !== "importing") return;
+                settings.update({ apiKey });
+                followScreen();
+                void ingest.enqueueImport({ username, apiKey, timeZone });
+                if (known) {
+                    await db.updateListener(id, { lastViewedAt: now() });
+                    await reload();
+                }
+            },
+        ),
 
-        open,
+        open: guarded("Couldn't open the Listener", open),
 
         /** Shows setup to add another Listener. */
         startAdding: (): void => void dispatch({ type: "addingStarted" }),
 
         /** Leaves setup for the Listener viewed most recently. */
-        async cancelAdding(): Promise<void> {
+        cancelAdding: guarded("Couldn't open the Listener", async () => {
             const previous =
                 mostRecentlyViewed(store.getState().listeners)?.id ??
                 queuedImportBesides()?.listenerId;
             if (previous) await open(previous);
-        },
+        }),
 
         /** How many Scrobbles are stored for a Listener, for the removal prompt. */
-        scrobbleCount: (id: ListenerId): Promise<number> => db.countScrobblesOf(id),
+        scrobbleCount: (id: ListenerId): Promise<number | undefined> =>
+            db.countScrobblesOf(id).catch((error: unknown) => {
+                failures.report("Couldn't count the Scrobbles", error);
+                return undefined;
+            }),
 
         /** Removes a Listener's jobs and Scrobbles; if in view, opens the next most recently viewed. */
-        async removeListener(id: ListenerId): Promise<void> {
+        removeListener: guarded("Couldn't remove the Listener", async (id: ListenerId) => {
             const next = mostRecentlyViewed(
                 store.getState().listeners.filter((listener) => listener.id !== id),
             );
@@ -401,12 +460,12 @@ export function createSession({
             }
             await ingest.removeListener(id);
             await reload();
-        },
+        }),
 
-        resumeImport,
+        resumeImport: guarded("Couldn't resume the import", resumeImport),
 
         /** Probes a new API key against the current Listener, saving it and resuming their import only if last.fm takes it. */
-        async changeApiKey(apiKey: string): Promise<void> {
+        changeApiKey: guarded("Couldn't change the API key", async (apiKey: string) => {
             const username = currentUsername();
             if (!username || !dispatch({ type: "keySubmitted", apiKey })) return;
             const result = await ingest.probe(username, apiKey);
@@ -414,7 +473,7 @@ export function createSession({
             if (store.getState().apiKeyCheck.kind !== "saved") return;
             settings.update({ apiKey });
             await resumeImport();
-        },
+        }),
 
         /** Queues a Sync of the dashboard's Listener with the stored API key. */
         sync(): void {
@@ -427,20 +486,27 @@ export function createSession({
         },
 
         /** Pins an Artist, by name, for the dashboard's Listener. */
-        pin: (artist: string): Promise<void> => changePins((pins) => withPin(pins, artist)),
+        pin: guarded("Couldn't pin the Artist", (artist: string) =>
+            changePins((pins) => withPin(pins, artist)),
+        ),
 
         /** Unpins an Artist, by name, for the dashboard's Listener. */
-        unpin: (artist: string): Promise<void> => changePins((pins) => withoutPin(pins, artist)),
+        unpin: guarded("Couldn't unpin the Artist", (artist: string) =>
+            changePins((pins) => withoutPin(pins, artist)),
+        ),
 
         /** Moves the current Listener's Days to `timeZone`, rebuilding the tables from what is stored. */
-        async changeTimeZone(timeZone: string): Promise<void> {
+        changeTimeZone: guarded("Couldn't change the timezone", async (timeZone: string) => {
             const listener = currentListener();
             if (!listener || listener.timeZone === timeZone) return;
             await db.updateListener(listener.id, { timeZone });
-            if (dispatch({ type: "listenerChanged", listener: { ...listener, timeZone } }))
+            if (dispatchRow({ type: "listenerChanged", listener: { ...listener, timeZone } }))
                 showCurrent();
             await reload();
-        },
+        }),
+
+        /** Stops reacting to settled jobs. */
+        dispose: stopListening,
     };
 }
 

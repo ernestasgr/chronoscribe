@@ -5,6 +5,7 @@ import {
     artistNamed,
     searchArtists,
     valueAt,
+    type DayIndex,
     type PinnedArtist,
     type StandingsTables,
 } from "../standings";
@@ -30,7 +31,7 @@ export function Pins({
 }: {
     listener: ListenerRow;
     tables: StandingsTables;
-    day: number;
+    day: DayIndex;
     pins: readonly PinnedArtist[];
 }) {
     const { session } = useServices();

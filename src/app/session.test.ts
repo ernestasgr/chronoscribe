@@ -8,7 +8,8 @@ import { createEventBus } from "../events";
 import { createIngest, type IngestEvents, type Job, type Outcome } from "../ingest";
 import { buildStandings } from "../standings";
 import { createTimeline } from "../timeline";
-import { createSession, transition, type SessionState } from "./session";
+import { createFailures } from "./failures";
+import { createSession, transition, viewedListener, type SessionState } from "./session";
 import { createSettings } from "./settings";
 
 const API_KEY = "fixture-key";
@@ -49,7 +50,8 @@ async function setUp(
     const requests: URL[] = [];
     const events = createEventBus<IngestEvents>();
     if (apiKey !== undefined) await db.saveSettings({ ...(await db.loadSettings()), apiKey });
-    const settings = await createSettings(db);
+    const failures = createFailures();
+    const settings = await createSettings(db, failures);
     const ingest = createIngest({
         db,
         events,
@@ -92,12 +94,13 @@ async function setUp(
         ingest,
         timeline,
         settings,
+        failures,
         listeners: await db.listeners(),
         defaultTimeZone: "UTC",
         now: () => ++clock,
     });
     const firstDay = () => timeline.store.getState().tables?.firstDay;
-    return { requests, settings, ingest, timeline, session, firstDay };
+    return { requests, settings, ingest, timeline, session, failures, firstDay };
 }
 
 const storedKey = (settings: Awaited<ReturnType<typeof createSettings>>) =>
@@ -303,7 +306,7 @@ type TestSession = Awaited<ReturnType<typeof setUp>>["session"];
 /** What the session shows, in a word and a Listener. */
 const viewing = (session: TestSession) => {
     const { screen } = session.store.getState();
-    if (screen.kind === "dashboard") return `dashboard ${screen.listener.id}`;
+    if (screen.kind === "dashboard") return `dashboard ${screen.listenerId}`;
     return screen.kind === "importing" ? `importing ${screen.listenerId}` : "setup";
 };
 
@@ -513,10 +516,8 @@ const job = (outcome: Outcome): Job => ({
 const offline = { kind: "Transient", message: "Network error" } as const;
 
 /** The Pinned Artists of the Listener the dashboard shows. */
-const pinsOnScreen = (session: TestSession) => {
-    const { screen } = session.store.getState();
-    return screen.kind === "dashboard" ? screen.listener.pinnedArtists : undefined;
-};
+const pinsOnScreen = (session: TestSession) =>
+    viewedListener(session.store.getState())?.pinnedArtists;
 
 describe("Pinned Artists", () => {
     let db: Db;
@@ -556,6 +557,21 @@ describe("Pinned Artists", () => {
         expect((await db.listener(BATH))?.pinnedArtists).toEqual(["Goldfrapp"]);
     });
 
+    test("a pin the browser's storage refuses is reported, and the screen keeps what is stored", async () => {
+        const refusing: Db = {
+            ...db,
+            updateListener: () => Promise.reject(new Error("QuotaExceededError")),
+        };
+        const { session, failures } = await setUp(refusing, { apiKey: API_KEY });
+
+        await session.pin("Massive Attack");
+
+        expect(pinsOnScreen(session)).toEqual([]);
+        expect(failures.store.getState().latest?.message).toBe(
+            "Couldn't pin the Artist: Error: QuotaExceededError",
+        );
+    });
+
     test("survive a Sync", async () => {
         const { session, ingest } = await setUp(db, { apiKey: API_KEY });
         await session.pin("Massive Attack");
@@ -586,7 +602,7 @@ describe("the session's transitions", () => {
         listeners: [],
     };
     const dashboard: SessionState = {
-        screen: { kind: "dashboard", listener: bristolRow },
+        screen: { kind: "dashboard", listenerId: BRISTOL },
         apiKeyCheck: { kind: "idle" },
         listeners: [bristolRow],
     };

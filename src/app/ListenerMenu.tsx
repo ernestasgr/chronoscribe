@@ -168,7 +168,7 @@ function RemoveDialog({
         if (!open) return;
         let current = true;
         void session.scrobbleCount(listener.id).then((n) => {
-            if (current) setScrobbles({ id: listener.id, count: n });
+            if (current && n !== undefined) setScrobbles({ id: listener.id, count: n });
         });
         return () => {
             current = false;

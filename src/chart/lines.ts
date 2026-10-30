@@ -7,8 +7,14 @@ import {
     line,
     type CurveFactory,
 } from "d3-shape";
-import type { BelowTopX, LineShape } from "../db";
-import { UNRANKED, valueAt, type StandingsTables } from "../standings";
+import type { BelowTopX, LineShape } from "../settings";
+import {
+    UNRANKED,
+    valueAt,
+    type ArtistId,
+    type DayIndex,
+    type StandingsTables,
+} from "../standings";
 import { dailySegments, sCurveSegments, standingLevel, yAlong, type Point } from "./geometry";
 
 const PALETTE = [
@@ -63,7 +69,7 @@ export type LinesScale =
 
 export interface LinesFrame {
     tables: StandingsTables;
-    artists: readonly number[];
+    artists: readonly ArtistId[];
     /** The pixel x of a fractional Day. */
     dayX: (day: number) => number;
     scale: LinesScale;
@@ -96,7 +102,7 @@ function artistY(tables: StandingsTables, scale: LinesScale): ArtistY {
 }
 
 /** Each drawn Artist's line as runs of pixel points, in the shape the scale asks for. */
-export type LinesGeometry = ReadonlyMap<number, Point[][]>;
+export type LinesGeometry = ReadonlyMap<ArtistId, Point[][]>;
 
 /** The points of every drawn line in this frame, shared by the strokes and the dots that ride them. */
 export function linesGeometry({
@@ -119,7 +125,10 @@ const SOLID: number[] = [];
 const EVERYWHERE = 1e6;
 
 /** The pixel spans, left to right, where each Pinned Artist's line is drawn dashed. */
-export type DashedSpans = ReadonlyMap<number, readonly (readonly [left: number, right: number])[]>;
+export type DashedSpans = ReadonlyMap<
+    ArtistId,
+    readonly (readonly [left: number, right: number])[]
+>;
 
 /** Clips `context` to `spans`, or with `outside` to everywhere but them. */
 function clipToSpans(
@@ -181,7 +190,7 @@ export function strokeLines(
 export const yOnLine = (
     geometry: LinesGeometry,
     scale: LinesScale,
-    artist: number,
+    artist: ArtistId,
     x: number,
 ): number | undefined => {
     const segments = geometry.get(artist);
@@ -191,7 +200,10 @@ export const yOnLine = (
 /** The most cumulative Scrobbles any of `artists` has by the end of `day`. */
 export const mostScrobbles = (
     tables: StandingsTables,
-    artists: readonly number[],
-    day: number,
+    artists: readonly ArtistId[],
+    day: DayIndex,
 ): number =>
-    artists.reduce((most, artist) => Math.max(most, valueAt(tables, artist, day, "scrobbles")!), 0);
+    artists.reduce(
+        (most, artist) => Math.max(most, valueAt(tables, artist, day, "scrobbles") ?? 0),
+        0,
+    );

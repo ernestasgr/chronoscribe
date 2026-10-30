@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 export const API_ROOT = "https://ws.audioscrobbler.com/2.0/";
 
 /** A moment as last.fm counts it: whole seconds since the Unix epoch. */
@@ -54,20 +56,6 @@ export interface RecentTracksRequest {
     signal?: AbortSignal;
 }
 
-interface RawTrack {
-    artist: { "#text": string };
-    album: { "#text": string };
-    name: string;
-    date?: { uts: string };
-    "@attr"?: { nowplaying?: string };
-}
-
-interface RawBody {
-    error?: number;
-    message?: string;
-    recenttracks?: { track: RawTrack | RawTrack[]; "@attr": Record<string, string> };
-}
-
 export type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 
 const recentTracksUrl = (request: RecentTracksRequest): string => {
@@ -85,36 +73,68 @@ const recentTracksUrl = (request: RecentTracksRequest): string => {
     return url.toString();
 };
 
-/** Maps a last.fm response to a page, without the now-playing entry, or to its failure. */
-function parseRecentTracks(status: number, body: RawBody): LastfmResult<RecentTracksPage> {
-    if (body.error !== undefined) {
-        const kind = TRANSIENT_CODES.has(body.error) ? "Transient" : "Hard";
-        return fail(kind, body.message ?? `last.fm error ${body.error}`, body.error);
-    }
-    if (status < 200 || status >= 300 || !body.recenttracks) {
-        return fail(status === 429 || status >= 500 ? "Transient" : "Hard", `HTTP ${status}`);
-    }
+/** A count last.fm sends as a string of digits. */
+const Count = z.string().regex(/^\d+$/, "expected a count").transform(Number);
 
-    const { track, "@attr": attr } = body.recenttracks;
-    const tracks = Array.isArray(track) ? track : [track];
-    return {
-        ok: true,
-        value: {
-            scrobbles: tracks
-                .filter((t) => t.date?.uts !== undefined && t["@attr"]?.nowplaying !== "true")
-                .map((t) => ({
-                    uts: unixSeconds(Number(t.date!.uts)),
-                    artist: t.artist["#text"],
-                    track: t.name,
-                    album: t.album["#text"],
-                })),
-            page: Number(attr.page),
-            perPage: Number(attr.perPage),
-            totalPages: Number(attr.totalPages),
-            total: Number(attr.total),
-        },
-    };
+const Text = z.object({ "#text": z.string() });
+
+const Track = z.object({
+    artist: Text,
+    album: Text,
+    name: z.string(),
+    date: z.object({ uts: Count.transform(unixSeconds) }).optional(),
+    "@attr": z.object({ nowplaying: z.string().optional() }).optional(),
+});
+
+/** A last.fm error reply, which can come with any HTTP status. */
+const ErrorBody = z.object({ error: z.number(), message: z.string().optional() });
+
+/** A page of `user.getRecentTracks`; a lone track comes unwrapped, so it is wrapped here. */
+const RecentTracksBody = z
+    .object({
+        recenttracks: z.object({
+            track: z.union([Track, z.array(Track)]),
+            "@attr": z.object({ page: Count, perPage: Count, totalPages: Count, total: Count }),
+        }),
+    })
+    .transform(({ recenttracks: { track, "@attr": counts } }): RecentTracksPage => ({
+        scrobbles: (Array.isArray(track) ? track : [track]).flatMap((t) =>
+            t.date === undefined || t["@attr"]?.nowplaying === "true"
+                ? []
+                : [
+                      {
+                          uts: t.date.uts,
+                          artist: t.artist["#text"],
+                          track: t.name,
+                          album: t.album["#text"],
+                      },
+                  ],
+        ),
+        ...counts,
+    }));
+
+/** Whether an HTTP status is worth retrying. */
+const isTransientStatus = (status: number) => status === 429 || status >= 500;
+
+/** Maps a last.fm response to a page, without the now-playing entry, or to its failure. */
+function parseRecentTracks(status: number, body: unknown): LastfmResult<RecentTracksPage> {
+    const error = ErrorBody.safeParse(body);
+    if (error.success) {
+        const { error: code, message } = error.data;
+        const kind = TRANSIENT_CODES.has(code) ? "Transient" : "Hard";
+        return fail(kind, message ?? `last.fm error ${code}`, code);
+    }
+    if (status < 200 || status >= 300)
+        return fail(isTransientStatus(status) ? "Transient" : "Hard", `HTTP ${status}`);
+    const page = RecentTracksBody.safeParse(body);
+    return page.success
+        ? { ok: true, value: page.data }
+        : fail("Hard", `Malformed last.fm page: ${z.prettifyError(page.error)}`);
 }
+
+/** The response's JSON, or undefined when the body isn't JSON (such as a proxy's error page). */
+const jsonOf = (response: Response): Promise<unknown> =>
+    response.json().catch((): unknown => undefined);
 
 /** One page of `user.getRecentTracks`, newest first, without the now-playing entry. */
 export async function getRecentTracks(
@@ -123,7 +143,7 @@ export async function getRecentTracks(
 ): Promise<LastfmResult<RecentTracksPage>> {
     try {
         const response = await fetchFn(recentTracksUrl(request), { signal: request.signal });
-        return parseRecentTracks(response.status, (await response.json()) as RawBody);
+        return parseRecentTracks(response.status, await jsonOf(response));
     } catch (error) {
         return request.signal?.aborted
             ? fail("Aborted", "Cancelled")

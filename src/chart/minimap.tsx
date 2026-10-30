@@ -1,7 +1,13 @@
 import { scaleLinear } from "d3-scale";
 import { area, curveStepAfter } from "d3-shape";
 import { useCallback, useMemo, useRef, type KeyboardEvent, type PointerEvent } from "react";
-import { dayDate, dayScrobbles, type DayWindow, type StandingsTables } from "../standings";
+import {
+    dayDate,
+    dayIndex,
+    dayScrobbles,
+    type DayWindow,
+    type StandingsTables,
+} from "../standings";
 import { panned, useTimeline, useViewFrames, type View } from "../timeline";
 import { MARGIN, useSize } from "./layout";
 
@@ -20,7 +26,9 @@ const historyScale = (tables: StandingsTables, width: number) =>
 
 /** The Daily volume area as an SVG path over `width` pixels, from Day 0 to the last Day. */
 function volumePath(tables: StandingsTables, width: number): string {
-    const volumes = Array.from({ length: tables.dayCount }, (_, day) => dayScrobbles(tables, day));
+    const volumes = Array.from({ length: tables.dayCount }, (_, day) =>
+        dayScrobbles(tables, dayIndex(day)),
+    );
     const dayX = historyScale(tables, width);
     const volumeY = scaleLinear()
         .domain([0, Math.max(1, ...volumes)])
@@ -42,13 +50,13 @@ function markWindow(
     tables: StandingsTables,
 ) {
     const left = dayX(window.start);
-    const start = Math.round(window.start);
+    const start = dayIndex(Math.round(window.start));
     handle.style.left = `${left}px`;
     handle.style.width = `${Math.max(MIN_HANDLE_PX, dayX(window.end) - left)}px`;
     handle.setAttribute("aria-valuenow", String(start));
     handle.setAttribute(
         "aria-valuetext",
-        `${dayDate(tables, start)} to ${dayDate(tables, Math.round(window.end))}`,
+        `${dayDate(tables, start)} to ${dayDate(tables, dayIndex(Math.round(window.end)))}`,
     );
 }
 

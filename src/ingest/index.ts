@@ -15,6 +15,8 @@ import {
     type Fetch,
     type LastfmFailure,
     type LastfmScrobble,
+    type RecentTracksPage,
+    type RecentTracksRequest,
     type UnixSeconds,
 } from "../lastfm";
 
@@ -219,6 +221,23 @@ export const backoffMs = (failures: number): number => FIRST_BACKOFF_MS * 2 ** (
 /** The outcome of an import that stopped on `error`, keeping everything it stored. */
 const paused = (error: LastfmFailure): Outcome => ({ status: "paused", error });
 
+/** The outcome of a Sync that stopped on `error`, having stored nothing. */
+const failed = (error: LastfmFailure): Outcome => ({ status: "failed", error });
+
+/** How a job ends on a failed page: cancelled if its signal stopped it, else as `outcome` says. */
+const stoppedBy = (error: LastfmFailure, outcome: (error: LastfmFailure) => Outcome): Outcome =>
+    error.kind === "Aborted" ? { status: "cancelled" } : outcome(error);
+
+const CANCELLED: LastfmFailure = { kind: "Aborted", message: "Cancelled" };
+
+/** Whether a wait before retrying left the request as it was or changed it. */
+type Backoff = "same" | "changed";
+
+/** A page fetched, with when its request was started, or why it couldn't be. */
+type FetchedPage =
+    | { ok: true; value: RecentTracksPage; startedAt: number }
+    | { ok: false; error: LastfmFailure };
+
 /** Which unsettled job a new request joins: one per Listener and kind. */
 const unsettledKey = (kind: JobKind, listener: ListenerId) => `${kind} ${listener}`;
 
@@ -263,7 +282,42 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
 
     const dispatch = (id: number, event: JobEvent) =>
         store.setState(({ queue }) => ({ queue: withEvent(queue, id, event) }));
-    const jobOf = (id: number) => store.getState().queue.find((job) => job.id === id)!;
+    /** A queued job; jobs are never removed from the queue, so one missing is a bug. */
+    const jobOf = (id: number): Job => {
+        const job = store.getState().queue.find((queued) => queued.id === id);
+        if (!job) throw new Error(`Job ${id} is not in the queue`);
+        return job;
+    };
+
+    /**
+     * Fetches the page `request` describes, waiting out transient failures with backoff;
+     * `afterBackoff` may change the request, which counts failures afresh. Never rejects.
+     */
+    async function fetchPage(
+        id: number,
+        signal: AbortSignal,
+        request: () => Omit<RecentTracksRequest, "signal">,
+        afterBackoff: () => Promise<Backoff> = async () => "same",
+    ): Promise<FetchedPage> {
+        let failures = 0;
+        for (;;) {
+            const startedAt = transport.now();
+            await throttle();
+            if (signal.aborted) return { ok: false, error: CANCELLED };
+            const result = await getRecentTracks({ ...request(), signal }, transport.fetch);
+            if (result.ok) return { ...result, startedAt };
+            const { error } = result;
+            failures++;
+            if (error.kind !== "Transient" || failures >= MAX_FAILURES) return result;
+            const inMs = backoffMs(failures);
+            dispatch(id, {
+                type: "retrying",
+                retry: { failures, pausesAt: MAX_FAILURES, inMs, error },
+            });
+            await sleepUnlessAborted(inMs, signal);
+            if ((await afterBackoff()) === "changed") failures = 0;
+        }
+    }
 
     /** The row to import into: an unfinished one, resumed as it was, or a fresh one viewed at `queuedAt`. */
     async function importRow(
@@ -322,7 +376,6 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
         let cursor = await resumeFrom(row, row.pageSize);
         let pageTimes: number[] = [];
         let total: number | undefined;
-        let failures = 0;
 
         const report = () => {
             if (total === undefined) return;
@@ -338,57 +391,45 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
         const switchToSmallPages = async () => {
             cursor = await smallerPages(row);
             pageTimes = [];
-            failures = 0;
             report();
+        };
+        // A page of 1000 that fails is asked for again in 200s.
+        const afterBackoff = async (): Promise<Backoff> => {
+            if (cursor.pageSize === SMALL_PAGE) return "same";
+            await switchToSmallPages();
+            return "changed";
         };
 
         for (;;) {
-            const startedAt = transport.now();
-            await throttle();
-            if (signal.aborted) return { status: "cancelled" };
-            const result = await getRecentTracks(
-                {
+            const fetched = await fetchPage(
+                id,
+                signal,
+                () => ({
                     user: row.username,
                     apiKey: request.apiKey,
                     page: cursor.page,
                     limit: cursor.pageSize,
                     to: cursor.to,
-                    signal,
-                },
-                transport.fetch,
+                }),
+                afterBackoff,
             );
-            if (!result.ok) {
-                const { error } = result;
-                if (error.kind === "Aborted") return { status: "cancelled" };
-                if (error.kind === "Hard") return paused(error);
-                failures++;
-                if (failures >= MAX_FAILURES) return paused(error);
-                const inMs = backoffMs(failures);
-                dispatch(id, {
-                    type: "retrying",
-                    retry: { failures, pausesAt: MAX_FAILURES, inMs, error },
-                });
-                await sleepUnlessAborted(inMs, signal);
-                if (cursor.pageSize !== SMALL_PAGE) await switchToSmallPages();
-                continue;
-            }
-            failures = 0;
+            if (!fetched.ok) return stoppedBy(fetched.error, paused);
             // A page cut short would leave a gap below it, so it is fetched again in 200s.
-            if (cursor.pageSize !== SMALL_PAGE && result.value.perPage < cursor.pageSize) {
+            if (cursor.pageSize !== SMALL_PAGE && fetched.value.perPage < cursor.pageSize) {
                 await switchToSmallPages();
                 continue;
             }
 
-            const { scrobbles, totalPages } = result.value;
+            const { scrobbles, totalPages } = fetched.value;
             // The run's first page counts what is left below its `to`; later pages could drift.
-            total ??= cursor.fetched + result.value.total;
+            total ??= cursor.fetched + fetched.value.total;
             const last = scrobbles.length === 0 || cursor.page >= totalPages;
             await db.addPage(
                 row.id,
                 scrobbles.map((scrobble) => ({ listenerId: row.id, ...scrobble })),
                 { last },
             );
-            pageTimes.push(transport.now() - startedAt);
+            pageTimes.push(transport.now() - fetched.startedAt);
             cursor = {
                 ...cursor,
                 page: cursor.page + 1,
@@ -422,38 +463,17 @@ export function createIngest({ db, events, transport = browserTransport }: Inges
         let pageSize = row.pageSize;
         let page = 1;
         let fetched: LastfmScrobble[] = [];
-        let failures = 0;
 
         for (;;) {
-            await throttle();
-            if (signal.aborted) return { status: "cancelled" };
-            const result = await getRecentTracks(
-                {
-                    user: row.username,
-                    apiKey: request.apiKey,
-                    page,
-                    limit: pageSize,
-                    from,
-                    to,
-                    signal,
-                },
-                transport.fetch,
-            );
-            if (!result.ok) {
-                const { error } = result;
-                if (error.kind === "Aborted") return { status: "cancelled" };
-                failures++;
-                if (error.kind === "Hard" || failures >= MAX_FAILURES)
-                    return { status: "failed", error };
-                const inMs = backoffMs(failures);
-                dispatch(id, {
-                    type: "retrying",
-                    retry: { failures, pausesAt: MAX_FAILURES, inMs, error },
-                });
-                await sleepUnlessAborted(inMs, signal);
-                continue;
-            }
-            failures = 0;
+            const result = await fetchPage(id, signal, () => ({
+                user: row.username,
+                apiKey: request.apiKey,
+                page,
+                limit: pageSize,
+                from,
+                to,
+            }));
+            if (!result.ok) return stoppedBy(result.error, failed);
             // A page cut short would leave a gap, so the window is fetched again in 200s.
             if (pageSize !== SMALL_PAGE && result.value.perPage < pageSize) {
                 pageSize = SMALL_PAGE;

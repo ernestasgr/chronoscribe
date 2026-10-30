@@ -10,6 +10,9 @@ import {
 import type { ListenerId } from "../db";
 import type { LastfmFailure } from "../lastfm";
 import {
+    Alert,
+    AlertDescription,
+    AlertTitle,
     Button,
     Card,
     CardContent,
@@ -32,10 +35,19 @@ import {
     type FieldProblemOf,
     type ProblemField,
 } from "./fields";
-import { useQueue, useServices, useSession, useSettings } from "./services";
-import type { SetupStatus } from "./session";
+import { useFailures, useQueue, useServices, useSession, useSettings } from "./services";
+import { viewedListener, type SetupStatus } from "./session";
 
 export function App() {
+    return (
+        <>
+            <Screen />
+            <FailureToast />
+        </>
+    );
+}
+
+function Screen() {
     const screen = useSession((state) => state.screen);
 
     switch (screen.kind) {
@@ -44,8 +56,35 @@ export function App() {
         case "importing":
             return <Importing listenerId={screen.listenerId} username={screen.username} />;
         case "dashboard":
-            return <Dashboard listener={screen.listener} />;
+            return <ViewedDashboard />;
     }
+}
+
+/** The dashboard of the Listener in view, once their row is listed. */
+function ViewedDashboard() {
+    const listener = useSession(viewedListener);
+    return listener ? <Dashboard listener={listener} /> : null;
+}
+
+/** The latest failure of something the app did in the background, until dismissed. */
+function FailureToast() {
+    const { failures } = useServices();
+    const latest = useFailures((state) => state.latest);
+    if (!latest) return null;
+    return (
+        <Alert
+            variant="destructive"
+            className="fixed right-4 bottom-4 left-4 z-50 shadow-lg sm:left-auto sm:max-w-sm"
+        >
+            <AlertTitle>Something went wrong</AlertTitle>
+            <AlertDescription>
+                <p>{latest.message}</p>
+                <Button size="sm" variant="ghost" className="mt-1" onClick={failures.dismiss}>
+                    Dismiss
+                </Button>
+            </AlertDescription>
+        </Alert>
+    );
 }
 
 /** A full-height page with one card in the middle. */
