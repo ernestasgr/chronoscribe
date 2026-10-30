@@ -9,14 +9,14 @@ The principles and patterns every change in this codebase follows. A ticket's ac
 - Zustand for app state, TanStack Virtual for long lists. TanStack Query is not used, because there is no server state to cache.
 - Zod for parsing data that crosses a boundary.
 - Heavy computation runs in a Web Worker over Comlink, passing typed arrays back zero-copy.
-- The chart draws on Canvas 2D using D3 modules (`d3-scale`, `d3-shape`, `d3-zoom`, `d3-array`). React renders its axes, labels and markers.
+- The chart draws on Canvas 2D using D3 modules (`d3-scale`, `d3-shape`, `d3-zoom`, `d3-selection`). React renders its axes, labels and markers.
 - Tailwind and shadcn/ui for the interface.
 - Vitest and Playwright for tests, oxlint and oxfmt for linting and formatting, pnpm as the package manager (pinned in `packageManager`).
 
 ## Modules
 
 - Each module is a directory `src/<module>/` with one public surface, `index.ts`. Other modules import only through it.
-- Dependencies point downward, lowest first: `events`, `ui`, `lastfm`, `db`, `ingest`, `standings`, `timeline`, `chart`, `app`. Adding a module means placing it in this order.
+- Dependencies point downward, lowest first: `events`, `ui`, `lastfm`, `settings`, `db`, `ingest`, `standings`, `timeline`, `chart`, `app`. Adding a module means placing it in this order.
 - Each module owns its concern: `db` is the only code that touches IndexedDB (apart from the worker's read), and `standings` (plus the chart's line loop) is the only code that reads the raw table arrays.
 - `src/architecture.test.ts` enforces all of the above. Extend it whenever a new rule of this kind appears.
 
@@ -36,7 +36,7 @@ The principles and patterns every change in this codebase follows. A ticket's ac
 ## Services and composition
 
 - A stateful module exports a `create*` factory that takes all of its dependencies (database, event bus, transport, clock, worker) and returns a service object.
-- Module scope holds only constants, types and pure functions. Mutable state lives inside a factory's closure or store, and a module does nothing when it is imported.
+- Module scope holds only constants, types and pure functions. Mutable state lives inside a factory's closure or store, and a module does nothing when it is imported. The one exception is a `WeakMap` memo keyed on immutable tables, which changes no result.
 - `src/app/index.tsx` is the composition root: it builds every service once and wires them together.
 - Components reach services through React context (`ServicesContext`, `TimelineContext`), never through imported singletons.
 - Inject time and I/O (`now`, `sleep`, `fetch`) so tests can control them.
@@ -61,6 +61,7 @@ The principles and patterns every change in this codebase follows. A ticket's ac
 - Expected failures are values: discriminated unions such as `{ ok: true, value } | { ok: false, error }`, so callers must handle them and the types show them.
 - `throw` is reserved for programmer errors and broken invariants.
 - Parse, don't validate: data crossing a boundary (last.fm responses, Dexie rows, worker messages, user input) goes through a Zod schema with `safeParse`, which yields a typed value or a failure value. Never cast it with `as`. A malformed last.fm page is a `Hard` failure, never a stored `NaN`.
+- Work nobody awaits (UI handlers, event subscribers, store subscriptions) reports its failure to the app's `failures` store rather than rejecting unhandled.
 - Long-running work accepts an `AbortSignal` and passes it down to `fetch`; cancelling is an outcome (`cancelled`), not a failure.
 - A job's promise resolves to its outcome and never rejects.
 
