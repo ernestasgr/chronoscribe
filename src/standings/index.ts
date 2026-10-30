@@ -21,11 +21,13 @@ export interface StandingsTables {
     dayCount: number;
     firstDay: { date: string; timeZone: string };
     /** Day-major, indexed `day * artists.length + artist`. */
-    cumulative: Uint32Array;
+    cumulative: Uint32Array<ArrayBuffer>;
     /** 1-based Standing, or UNRANKED. Day-major like `cumulative`. */
-    standing: Uint16Array;
+    standing: Uint16Array<ArrayBuffer>;
     /** Each Day's artist ids sorted by Standing, unranked slots filled with UNRANKED. */
-    rankOrder: Uint16Array;
+    rankOrder: Uint16Array<ArrayBuffer>;
+    /** Each Day's Daily volume, so it isn't summed over every Artist each time it is asked for. */
+    dailyVolume: Uint32Array<ArrayBuffer>;
 }
 
 export interface TopXRow {
@@ -92,6 +94,7 @@ export function buildStandings(
     const cumulative = new Uint32Array(dayCount * artistCount);
     const standing = new Uint16Array(dayCount * artistCount).fill(UNRANKED);
     const rankOrder = new Uint16Array(dayCount * artistCount).fill(UNRANKED);
+    const dailyVolume = new Uint32Array(dayCount);
 
     const counts = new Uint32Array(artistCount);
     // When each Artist reached their current count; ties in count go to the earlier one.
@@ -112,6 +115,7 @@ export function buildStandings(
             if (counts[id] === 0) ranked.push(id);
             counts[id]!++;
             reachedAt[id] = uts;
+            dailyVolume[day]!++;
             changed = true;
         }
         if (changed) ranked.sort(byStanding);
@@ -130,6 +134,7 @@ export function buildStandings(
         cumulative,
         standing,
         rankOrder,
+        dailyVolume,
     };
 }
 
@@ -177,12 +182,8 @@ export function dailyPlays(tables: StandingsTables, day: DayIndex, artist: Artis
 }
 
 /** Every Scrobble within `day`, across all Artists. */
-export function dayScrobbles(tables: StandingsTables, day: DayIndex): number {
-    let total = 0;
-    for (let artist = 0; artist < tables.artists.length; artist++)
-        total += dailyPlays(tables, day, artistId(artist));
-    return total;
-}
+export const dayScrobbles = (tables: StandingsTables, day: DayIndex): number =>
+    tables.dailyVolume[day] ?? 0;
 
 export interface Climber {
     id: ArtistId;
@@ -436,5 +437,6 @@ export function transferables(tables: StandingsTables): ArrayBuffer[] {
         tables.cumulative.buffer,
         tables.standing.buffer,
         tables.rankOrder.buffer,
-    ] as ArrayBuffer[];
+        tables.dailyVolume.buffer,
+    ];
 }
