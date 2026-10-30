@@ -81,6 +81,7 @@ The principles and patterns every change in this codebase follows. A ticket's ac
 - Use a shadcn component before hand-rolling a control: run `pnpm dlx shadcn@4.22.1 add <name> -y < /dev/null`, then export it from `src/ui/index.ts`. The CLI rewrites the `cn` import to `from "cn"`: change it to `from "./utils"`, and remove any `cn` package it added.
 - Colours come from the theme tokens in `src/index.css` (`bg-card`, `text-muted-foreground`, and so on), so dark mode, which follows the OS, works with no extra classes.
 - Make every control accessible by role and name; the e2e tests find elements that way. Layouts work from phone width up.
+- The timeline prototype's variant A sets the bar for the chart, player and Focus Day look and feel: open it (`timeline-prototype` in `.claude/launch.json`, source in `.scratch/prototype-timeline/prototype/timeline/src`) and match it unless the ticket says otherwise. `.scratch` is git-ignored, so it exists only in the main checkout.
 
 ## Testing
 
@@ -91,7 +92,8 @@ The principles and patterns every change in this codebase follows. A ticket's ac
   3. **The pure core (Vitest):** plain function tests, plus benchmarks that guard the performance budgets.
 - Tests never call the real last.fm API.
 - Write tests first (red, green, refactor) where the behaviour is new. A bug fix starts with a test that fails without it.
-- A change is done only when `pnpm typecheck`, `pnpm lint`, `pnpm fmt:check`, `pnpm test`, `pnpm e2e` and `pnpm build` all pass. When a refactor breaks an e2e test, find the commit that broke it rather than changing the test to fit.
+- A change is done only when `pnpm check` and `pnpm e2e` pass. The pre-commit hook runs `pnpm check`; CI runs both. When a refactor breaks an e2e test, find the commit that broke it rather than changing the test to fit.
+- A UI change is done only once you have used it in the running app (`app` in `.claude/launch.json`), starting from the default view a fresh import lands on, not only the state an e2e test sets up.
 
 ## Types
 
@@ -99,7 +101,7 @@ The principles and patterns every change in this codebase follows. A ticket's ac
 - Query functions take branded parameters: a function over Days or Artists accepts `DayIndex` and `ArtistId`, not `number`, so swapped arguments don't compile.
 - Prefer discriminated unions over optional fields and boolean flags, so impossible states cannot be written down.
 - Every `as` assertion is `as const`, a brand constructor, or carries a `// cast:` comment on the line above saying why the types can't express it (a library's loose typing, for example). `src/architecture.test.ts` enforces this; `any` is a lint error.
-- No non-null `!` except on array and typed-array reads inside benchmarked loops. Elsewhere, handle the missing case or `throw` an error naming the broken invariant.
+- No non-null `!` except on array and typed-array reads inside benchmarked loops. Elsewhere, handle the missing case or `throw` an error naming the broken invariant. oxlint enforces this; the files with such loops are exempted in `.oxlintrc.json`.
 - Each limit or set of options is defined once, as a schema or `as const` array, and everything else reads it: the stored row's parser, the input's `min` and `max`, the select's options.
 
 ## Performance
@@ -111,14 +113,9 @@ The principles and patterns every change in this codebase follows. A ticket's ac
 
 - Make comments a single line explaining why, on exports and on anything non-obvious. Name things for what they are in the domain.
 - Prefer small named helpers over long inline expressions.
-- A file holds one feature, with the small components only it uses. One that grows past about 300 lines, or picks up a second feature, is split by feature (as `Dashboard`, `Player`, `SyncControl`, `ChartSettings` and `FocusDayPanel` are).
+- A file holds one feature, with the small components only it uses. One that grows past about 300 lines, or picks up a second feature, is split by feature (as `Dashboard`, `Player`, `SyncControl`, `ChartSettings` and `FocusDayPanel` are). oxlint's `max-lines` enforces the size; the files still awaiting a split are listed in `.oxlintrc.json`, and a split removes its file from that list.
 
 ## Dependencies
 
 - Prefer the platform and the libraries already in the stack over adding a new package.
 - Use releases that are at least two weeks old, and commit `pnpm-lock.yaml`.
-
-## Git
-
-- Write commit subjects as Conventional Commits: `type(scope): subject`.
-- Rebase rather than merge.
