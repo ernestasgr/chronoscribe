@@ -25,7 +25,14 @@ import {
     type PinnedArtist,
     type StandingsTables,
 } from "../standings";
-import { useFocusDay, usePlaying, useTables, useTimeline, type Timeline } from "../timeline";
+import {
+    useBuild,
+    useFocusDay,
+    usePlaying,
+    useTables,
+    useTimeline,
+    type Timeline,
+} from "../timeline";
 import {
     Alert,
     AlertDescription,
@@ -111,14 +118,7 @@ export function Dashboard({ listener }: { listener: ListenerRow }) {
         [tables, listener.pinnedArtists],
     );
 
-    if (!tables)
-        return (
-            <main className="grid min-h-svh place-items-center">
-                <p role="status" className="text-sm text-muted-foreground">
-                    Building {username}'s Standings…
-                </p>
-            </main>
-        );
+    if (!tables) return <Building username={username} />;
 
     return (
         <main className="grid min-h-svh grid-rows-[auto_minmax(20rem,1fr)_auto] gap-4 p-4 lg:h-svh lg:grid-cols-[1fr_22rem] lg:grid-rows-[auto_1fr]">
@@ -151,6 +151,31 @@ export function Dashboard({ listener }: { listener: ListenerRow }) {
                 <Separator />
                 <Climbers tables={tables} day={day} x={x} mode={mode} />
             </Card>
+        </main>
+    );
+}
+
+/** The wait for a Listener's first tables, or why building them failed. */
+function Building({ username }: { username: string }) {
+    const build = useBuild();
+    const { retry } = useTimeline();
+    return (
+        <main className="grid min-h-svh place-items-center p-4">
+            {build.kind === "failed" ? (
+                <Alert variant="destructive" className="max-w-md">
+                    <AlertTitle>Couldn't build {username}'s Standings</AlertTitle>
+                    <AlertDescription>
+                        <p>{build.message}</p>
+                        <Button size="sm" className="mt-1" onClick={retry}>
+                            Retry
+                        </Button>
+                    </AlertDescription>
+                </Alert>
+            ) : (
+                <p role="status" className="text-sm text-muted-foreground">
+                    Building {username}'s Standings…
+                </p>
+            )}
         </main>
     );
 }
