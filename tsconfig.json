@@ -1,17 +1,10 @@
 {
     "compilerOptions": {
         "target": "ES2023",
-        "lib": [
-            "ES2023",
-            "DOM",
-            "DOM.Iterable"
-        ],
+        "lib": ["ES2023", "DOM", "DOM.Iterable"],
         "module": "ESNext",
         "moduleResolution": "bundler",
-        "types": [
-            "vite/client",
-            "node"
-        ],
+        "types": ["vite/client", "node"],
         "jsx": "react-jsx",
         "strict": true,
         "noUncheckedIndexedAccess": true,
@@ -22,16 +15,8 @@
         "skipLibCheck": true,
         "noEmit": true,
         "paths": {
-            "@/*": [
-                "./src/*"
-            ]
+            "@/*": ["./src/*"]
         }
     },
-    "include": [
-        "src",
-        "e2e",
-        "test-support",
-        "vite.config.ts",
-        "playwright.config.ts"
-    ]
+    "include": ["src", "e2e", "test-support", "vite.config.ts", "playwright.config.ts"]
 }
