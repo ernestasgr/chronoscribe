@@ -22,6 +22,25 @@ const longtail: FixtureUser = {
     ],
 };
 
+// Long names don't widen Top X: they're truncated, as the Climbers beside them need the room.
+const longNames: FixtureUser = {
+    username: "Longnames",
+    history: [
+        ...scrobbles(
+            "Huey Lewis & The News Greatest Hits Live In Concert",
+            40,
+            "2026-07-01T08:00:00Z",
+        ),
+        ...scrobbles("Modern Talking", 30, "2026-07-01T09:00:00Z"),
+        ...scrobbles(
+            "Huey Lewis & The News Greatest Hits Live In Concert",
+            3,
+            "2026-07-02T08:00:00Z",
+        ),
+        ...scrobbles("Modern Talking", 1, "2026-07-02T09:00:00Z"),
+    ],
+};
+
 test.use({ timezoneId: "UTC" });
 
 const climbers = (page: Page) =>
@@ -86,4 +105,20 @@ test("Climbers fold the long tail by default, and the mode survives a reload", a
     await expect(page.getByRole("combobox", { name: "Climbers" })).toHaveValue("all");
     await focusOn(page, "2026-07-02", "2026-07-01");
     await expect.poll(() => climbers(page)).toHaveLength(4);
+});
+
+test("on a wide screen, a long Artist name stays in its Top X column, clear of the Climbers", async ({
+    page,
+}) => {
+    await page.clock.setFixedTime(new Date("2026-07-10T12:00:00Z"));
+    await page.setViewportSize({ width: 1920, height: 1000 });
+    await serveLastfm(page, [longNames]);
+    await importListener(page, "Longnames");
+
+    await focusOn(page, "2026-07-02", "2026-07-01");
+    const topX = (await focusDay(page).getByRole("list", { name: "Top X" }).boundingBox())!;
+    const heading = (await focusDay(page)
+        .getByRole("heading", { name: "Climbers" })
+        .boundingBox())!;
+    expect(topX.x + topX.width).toBeLessThanOrEqual(heading.x);
 });

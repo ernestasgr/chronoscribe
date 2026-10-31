@@ -67,9 +67,9 @@ function TopX({ tables, day, x }: { tables: StandingsTables; day: DayIndex; x: n
     useFlip(list);
 
     return (
-        <section className="grid gap-2">
+        <section className="grid min-w-0 gap-2">
             <h3 className="text-sm font-medium text-muted-foreground">Top {x}</h3>
-            <ol ref={list} aria-label="Top X" className="grid gap-2">
+            <ol ref={list} aria-label="Top X" className="grid grid-cols-1 gap-2">
                 {rows.map((row) => (
                     <li key={row.artist} data-flip={row.artist} className="grid gap-1">
                         <div className="flex items-baseline gap-2 text-sm">
@@ -121,7 +121,7 @@ function Climbers({
     const { listed, folded } = climbers(tables, day, mode, x);
 
     return (
-        <section className="grid gap-2">
+        <section className="grid min-w-0 gap-2">
             <h3 className="text-sm font-medium text-muted-foreground">Climbers</h3>
             <ClimberList label="Climbers" rows={listed} />
             {listed.length === 0 && !folded && (
@@ -152,7 +152,7 @@ function Climbers({
 
 function ClimberList({ label, rows }: { label: string; rows: Climber[] }) {
     return (
-        <ol aria-label={label} className="grid gap-1.5">
+        <ol aria-label={label} className="grid grid-cols-1 gap-1.5">
             {rows.map((row) => (
                 <li key={row.artist} className="flex items-center gap-2 text-sm">
                     <span className="w-8 text-muted-foreground tabular-nums">#{row.standing}</span>{" "}
