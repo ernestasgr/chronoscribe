@@ -37,7 +37,9 @@ const longNames: FixtureUser = {
             3,
             "2026-07-02T08:00:00Z",
         ),
+        ...scrobbles("Kim Wilde", 2, "2026-07-01T10:00:00Z"),
         ...scrobbles("Modern Talking", 1, "2026-07-02T09:00:00Z"),
+        ...scrobbles("Kim Wilde", 35, "2026-07-02T10:00:00Z"),
     ],
 };
 
@@ -107,7 +109,7 @@ test("Climbers fold the long tail by default, and the mode survives a reload", a
     await expect.poll(() => climbers(page)).toHaveLength(4);
 });
 
-test("on a wide screen, a long Artist name stays in its Top X column, clear of the Climbers", async ({
+test("on a wide screen, the columns sit side by side with room between them, and no row overflows", async ({
     page,
 }) => {
     await page.clock.setFixedTime(new Date("2026-07-10T12:00:00Z"));
@@ -116,9 +118,20 @@ test("on a wide screen, a long Artist name stays in its Top X column, clear of t
     await importListener(page, "Longnames");
 
     await focusOn(page, "2026-07-02", "2026-07-01");
-    const topX = (await focusDay(page).getByRole("list", { name: "Top X" }).boundingBox())!;
-    const heading = (await focusDay(page)
-        .getByRole("heading", { name: "Climbers" })
-        .boundingBox())!;
-    expect(topX.x + topX.width).toBeLessThanOrEqual(heading.x);
+    const topX = focusDay(page).getByRole("list", { name: "Top X" });
+    const climbersHeading = focusDay(page).getByRole("heading", { name: "Climbers" });
+    const climbersList = focusDay(page).getByRole("list", { name: "Climbers" });
+    await expect(climbersList).toBeVisible();
+
+    const column = (await topX.boundingBox())!;
+    const heading = (await climbersHeading.boundingBox())!;
+    expect(heading.x - (column.x + column.width)).toBeGreaterThanOrEqual(24);
+    // The Climbers list starts just under its heading, not down where the Top X list ends.
+    const list = (await climbersList.boundingBox())!;
+    expect(list.y - heading.y).toBeLessThan(60);
+
+    const overflowing = await focusDay(page)
+        .locator('[aria-label="Top X"] > li, [aria-label="Climbers"] > li')
+        .evaluateAll((rows) => rows.filter((row) => row.scrollWidth > row.clientWidth).length);
+    expect(overflowing).toBe(0);
 });
