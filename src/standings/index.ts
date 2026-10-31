@@ -7,6 +7,7 @@ export {
     windowAt,
     windowIndex,
     type Soundtrack,
+    type SoundtrackTrack,
     type Soundtracks,
     type WindowIndex,
 } from "./soundtracks";

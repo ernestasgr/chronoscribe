@@ -14,7 +14,7 @@ const BRISTOL = { id: listenerId("Bristol"), timeZone: "UTC" };
 const SCROBBLES = [{ uts: 0, artist: "Massive Attack", track: "Teardrop" }];
 const TABLES = buildStandings(SCROBBLES, { timeZone: "UTC", today: 86_400 });
 const soundtracksOf = (windowDays: number) =>
-    buildSoundtracks(SCROBBLES, { timeZone: "UTC", today: 86_400, windowDays });
+    buildSoundtracks(SCROBBLES, { timeZone: "UTC", today: 86_400, windowDays, pick: "artist" });
 
 /** A build's answer, settled by hand: resolve it with a value, or reject it. */
 function deferred<T>() {
@@ -31,7 +31,12 @@ function setUp(
     builds: (() => StandingsTables)[],
     picks: ((windowDays: number) => Promise<Soundtracks>)[] = [],
 ) {
-    const settings = { secondsPerDay: 0.1, stepDays: 1, soundtrackDays: 30 };
+    const settings = {
+        secondsPerDay: 0.1,
+        stepDays: 1,
+        soundtrackDays: 30,
+        soundtrackPick: "artist" as const,
+    };
     const build: BuildProjection = async (_listener, _today, windowDays) => {
         const next = builds.shift();
         if (!next) throw new Error("no more builds scripted");

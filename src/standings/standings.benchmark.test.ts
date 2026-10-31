@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { SOUNDTRACK_PICKS } from "../settings";
 import {
     buildSoundtracks,
     buildStandings,
@@ -71,11 +72,12 @@ describe("benchmark on a history shaped like the measured one", () => {
         expect(rebuild).toBeLessThan(1_000);
     });
 
-    test("the Soundtracks for 1-Day or 30-Day Windows build in under 300 ms", () => {
+    test("the Soundtracks for 1-Day or 30-Day Windows build in under 300 ms, by either pick", () => {
         for (const windowDays of [1, 30])
-            expect(time(() => buildSoundtracks(history, { ...options, windowDays }))).toBeLessThan(
-                300,
-            );
+            for (const pick of SOUNDTRACK_PICKS)
+                expect(
+                    time(() => buildSoundtracks(history, { ...options, windowDays, pick })),
+                ).toBeLessThan(300);
     });
 
     test("a Focus Day report takes under 5 ms", () => {

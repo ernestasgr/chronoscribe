@@ -176,6 +176,47 @@ export function ApiKeyForm({ id, username }: { id: string; username: string }) {
     );
 }
 
+/** Each choice of a setting, as its stored value and its label. */
+export type Choices<T extends string> = readonly (readonly [value: T, label: string])[];
+
+/** A labelled select over a setting's choices, handing back only a value it offered. */
+export function OptionSelect<T extends string>({
+    id,
+    label,
+    value,
+    choices,
+    disabled,
+    onChange,
+}: {
+    id: string;
+    label: string;
+    value: T;
+    choices: Choices<T>;
+    disabled?: boolean;
+    onChange: (value: T) => void;
+}) {
+    return (
+        <div className="flex items-center gap-2">
+            <Label htmlFor={id}>{label}</Label>
+            <NativeSelect
+                id={id}
+                value={value}
+                disabled={disabled}
+                onChange={(e) => {
+                    const chosen = choices.find(([choice]) => choice === e.target.value);
+                    if (chosen) onChange(chosen[0]);
+                }}
+            >
+                {choices.map(([choice, text]) => (
+                    <NativeSelectOption key={choice} value={choice}>
+                        {text}
+                    </NativeSelectOption>
+                ))}
+            </NativeSelect>
+        </div>
+    );
+}
+
 /** A preset number of Days, by its label. */
 export type DayPreset = readonly [label: string, days: number];
 

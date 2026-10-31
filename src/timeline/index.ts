@@ -2,7 +2,7 @@ import * as Comlink from "comlink";
 import { createContext, useContext, useEffect } from "react";
 import { createStore, useStore, type StoreApi } from "zustand";
 import type { ListenerId } from "../db";
-import type { AppSettings } from "../settings";
+import type { AppSettings, SoundtrackPick } from "../settings";
 import type { Subscriber } from "../events";
 import type { IngestEvents } from "../ingest";
 import {
@@ -55,25 +55,30 @@ export interface Projection {
     soundtracks: Soundtracks;
 }
 
-/** Builds a Listener's tables and Soundtracks as of `today` (Unix seconds), in `windowDays` Windows. */
+/** Builds a Listener's tables and Soundtracks as of `today` (Unix seconds), in `windowDays` Windows picked by `pick`. */
 export type BuildProjection = (
     listener: ListenerRef,
     today: number,
     windowDays: number,
+    pick: SoundtrackPick,
 ) => Promise<Projection>;
 
-/** Picks a Listener's Soundtracks alone, for when only the Window size has changed. */
+/** Picks a Listener's Soundtracks alone, for when only the Window size or the pick has changed. */
 export type BuildSoundtracks = (
     listener: ListenerRef,
     today: number,
     windowDays: number,
+    pick: SoundtrackPick,
 ) => Promise<Soundtracks>;
 
 /** Calls `callback` with the frame's time in ms before the next paint; returns a cancel. */
 export type RequestFrame = (callback: (at: number) => void) => () => void;
 
 /** The playback settings, read when they are needed. */
-export type Playback = () => Pick<AppSettings, "secondsPerDay" | "stepDays" | "soundtrackDays">;
+export type Playback = () => Pick<
+    AppSettings,
+    "secondsPerDay" | "stepDays" | "soundtrackDays" | "soundtrackPick"
+>;
 
 const INITIAL: TimelineState = {
     listener: undefined,
@@ -177,6 +182,7 @@ export function createTimeline({
 
     const today = () => Math.floor(now() / 1000);
     const windowDays = () => playback().soundtrackDays;
+    const soundtrackPick = () => playback().soundtrackPick;
 
     /**
      * Builds the Listener's tables and Soundtracks; never rejects, as a failure is kept in
@@ -186,7 +192,7 @@ export function createTimeline({
         const buildId = store.getState().buildId + 1;
         const pickId = store.getState().pickId + 1;
         store.setState({ buildId, pickId, build: { kind: "running" } });
-        const built = await attempt(build(listener, today(), windowDays()));
+        const built = await attempt(build(listener, today(), windowDays(), soundtrackPick()));
         if (store.getState().buildId !== buildId) return;
         store.setState((state) =>
             built.ok
@@ -202,15 +208,17 @@ export function createTimeline({
     }
 
     /**
-     * Picks the held Listener's Soundtracks again for the Window size now set, keeping their
-     * tables; never rejects, as a failure is kept in `pick`.
+     * Picks the held Listener's Soundtracks again for the Window size and pick now set, keeping
+     * their tables; never rejects, as a failure is kept in `pick`.
      */
     async function repickSoundtracks(): Promise<void> {
         const { listener } = store.getState();
         if (!listener) return;
         const pickId = store.getState().pickId + 1;
         store.setState({ pickId, pick: { kind: "running" } });
-        const picked = await attempt(buildSoundtracks(listener, today(), windowDays()));
+        const picked = await attempt(
+            buildSoundtracks(listener, today(), windowDays(), soundtrackPick()),
+        );
         if (store.getState().pickId !== pickId) return;
         store.setState(
             picked.ok
@@ -293,10 +301,10 @@ export function createWorkerBuild(): Pick<TimelineDeps, "build" | "buildSoundtra
         new Worker(new URL("./standings.worker.ts", import.meta.url), { type: "module" }),
     );
     return {
-        build: (listener, today, windowDays) =>
-            worker.build(listener.id, listener.timeZone, today, windowDays),
-        buildSoundtracks: (listener, today, windowDays) =>
-            worker.soundtracks(listener.id, listener.timeZone, today, windowDays),
+        build: (listener, today, windowDays, pick) =>
+            worker.build(listener.id, listener.timeZone, today, windowDays, pick),
+        buildSoundtracks: (listener, today, windowDays, pick) =>
+            worker.soundtracks(listener.id, listener.timeZone, today, windowDays, pick),
     };
 }
 

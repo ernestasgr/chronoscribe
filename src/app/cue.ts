@@ -34,9 +34,8 @@ export function cueOf(
 export const samePlace = (a: Cue, b: Cue): boolean =>
     a.listener === b.listener && a.window === b.window;
 
-/** A Soundtrack's identity, whichever Window chose it: its Artist and tracks. */
-export const soundtrackKey = ({ artist, tracks }: Soundtrack): string =>
-    JSON.stringify([artist, ...tracks]);
+/** A Soundtrack's identity, whichever Window chose it: its tracks, each with its Artist. */
+export const soundtrackKey = ({ tracks }: Soundtrack): string => JSON.stringify(tracks);
 
 /** How long a Soundtrack plays at least before the next is sent, so bursts don't anger Spotify. */
 export const MIN_PLAY_MS = 2_000;

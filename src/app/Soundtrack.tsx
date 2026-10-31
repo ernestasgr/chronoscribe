@@ -1,7 +1,7 @@
-import { SOUNDTRACK_DAYS, SoundtrackDays } from "../settings";
+import { SOUNDTRACK_DAYS, SoundtrackDays, type SoundtrackPick } from "../settings";
 import { usePick, usePlaying, useSoundtrack, useTimeline } from "../timeline";
 import { Button, Label, Switch } from "../ui";
-import { DayPresets, NumberSetting, type DayPreset } from "./fields";
+import { DayPresets, NumberSetting, OptionSelect, type Choices, type DayPreset } from "./fields";
 import { timeOf } from "./connection";
 import { useServices, useSettings, useSoundtrackPlayer } from "./services";
 import { FREE, type Limit, type SoundtrackPlayer } from "./soundtrackPlayer";
@@ -12,6 +12,12 @@ const WINDOW_PRESETS: readonly DayPreset[] = [
     ["30d", 30],
     ["90d", 90],
     ["1y", 365],
+];
+
+/** How a Window's Soundtrack is picked, by label. */
+const PICK_CHOICES: Choices<SoundtrackPick> = [
+    ["artist", "top artist's top song"],
+    ["track", "most-played song"],
 ];
 
 /** The Soundtrack switch, held off while Spotify has asked the app to wait, saying until when. */
@@ -50,6 +56,7 @@ function PlayerSwitch({ player }: { player: SoundtrackPlayer }) {
 export function SoundtrackSettings() {
     const { settings, soundtrackPlayer } = useServices();
     const windowDays = useSettings((s) => s.soundtrackDays);
+    const pick = useSettings((s) => s.soundtrackPick);
 
     return (
         <div className="flex flex-wrap items-center gap-2">
@@ -77,6 +84,13 @@ export function SoundtrackSettings() {
                     name={(label) => `${label} Windows`}
                 />
             </div>
+            <OptionSelect
+                id="soundtrack-pick"
+                label="Pick"
+                value={pick}
+                choices={PICK_CHOICES}
+                onChange={(soundtrackPick) => settings.update({ soundtrackPick })}
+            />
             <PickFailure />
         </div>
     );
@@ -101,11 +115,11 @@ function PickFailure() {
 export function SoundtrackLine() {
     const on = useSettings((s) => s.soundtrack);
     const playing = usePlaying();
-    const soundtrack = useSoundtrack();
-    if (!on || !playing || !soundtrack) return null;
+    const first = useSoundtrack()?.tracks[0];
+    if (!on || !playing || !first) return null;
     return (
         <output aria-label="Soundtrack" className="basis-full truncate text-sm">
-            ♪ {soundtrack.tracks[0]} — {soundtrack.artist}
+            ♪ {first.track} — {first.artist}
         </output>
     );
 }

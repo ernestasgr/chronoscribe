@@ -16,11 +16,27 @@ const wildBunch: FixtureUser = {
     ],
 };
 
-/** Imports the Wild Bunch with the page's clock faked and stopped, so only `runFor` moves time. */
-async function openWithClock(page: Page) {
+// Air's Sexy Boy and Talisman tie at 3 plays, and Bonobo's Kerala has 4: the artist pick takes Air's
+// top track, the track pick takes Kerala.
+const pickUser: FixtureUser = {
+    username: "PickUser",
+    history: [
+        ...plays("Air", "Sexy Boy", 3, "2026-07-02T08:00:00Z"),
+        ...plays("Air", "Talisman", 3, "2026-07-02T09:00:00Z"),
+        ...plays("Bonobo", "Kerala", 4, "2026-07-02T10:00:00Z"),
+    ],
+};
+
+/** `count` plays of one track, a minute apart from `startIso`. */
+function plays(artist: string, track: string, count: number, startIso: string) {
+    return scrobbles(artist, count, startIso).map((scrobble) => ({ ...scrobble, track }));
+}
+
+/** Imports `user` with the page's clock faked and stopped, so only `runFor` moves time. */
+async function openWithClock(page: Page, user: FixtureUser = wildBunch) {
     await page.clock.install({ time: new Date("2026-07-31T12:00:00Z") });
-    await serveLastfm(page, [wildBunch]);
-    await importListener(page, "WildBunch");
+    await serveLastfm(page, [user]);
+    await importListener(page, user.username);
     await page.clock.pauseAt(new Date("2026-07-31T13:00:00Z"));
 }
 
@@ -76,4 +92,24 @@ test("the Soundtrack switch and Window size survive a reload", async ({ page }) 
     await page.reload();
     await expect(page.getByRole("switch", { name: "Soundtrack" })).toBeChecked();
     await expect(page.getByRole("spinbutton", { name: "Window size" })).toHaveValue("90");
+});
+
+test("the Pick chooses the Soundtrack by its Artist or outright, and survives a reload", async ({
+    page,
+}) => {
+    await openWithClock(page, pickUser);
+    await page.getByRole("switch", { name: "Soundtrack" }).click();
+    await button(page, "1w Windows").click();
+    await focusOn(page, FIRST_DAY, FIRST_DAY);
+    const pick = page.getByRole("combobox", { name: "Pick" });
+    await expect(pick).toHaveValue("artist");
+
+    await button(page, "Play").click();
+    await expect(soundtrack(page)).toHaveText("♪ Sexy Boy — Air");
+
+    await pick.selectOption("track");
+    await expect(soundtrack(page)).toHaveText("♪ Kerala — Bonobo");
+
+    await page.reload();
+    await expect(page.getByRole("combobox", { name: "Pick" })).toHaveValue("track");
 });

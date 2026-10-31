@@ -17,8 +17,7 @@ describe("the next Soundtrack may be sent", () => {
 
 const soundtrack = (artist: string, window = 0): Soundtrack => ({
     window: windowIndex(window),
-    artist,
-    tracks: [`${artist} track 0`],
+    tracks: [{ artist, track: `${artist} track 0` }],
 });
 
 const cue = (listener: string, window: number, artist = "Portishead"): Cue => ({
