@@ -47,7 +47,7 @@ One of the back-to-back, non-overlapping blocks of x Days the history is cut int
 _Avoid_: Period, bucket
 
 **Soundtrack**:
-The song that sums up a Window: the most-played track (by exact last.fm name, whatever its album) of the Window's most-played Artist, counted over all of the Window's Days, with ties broken as Standings break them. An empty Window has none, and the previous Window's Soundtrack stays shown through it.
+The song that sums up a Window, counted over all of the Window's Days by exact last.fm name (whatever the album), with ties broken as Standings break them. Under the artist pick it is the most-played track of the Window's most-played Artist; under the track pick it is the Window's most-played track outright, whoever its Artist. An empty Window has none, and the previous Window's Soundtrack stays shown through it.
 _Avoid_: Theme song, now playing
 
 **Import**:

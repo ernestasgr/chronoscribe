@@ -1,7 +1,8 @@
 import type { ChartOptions } from "../chart";
 import { TOP_X, TopXSize, type ClimbersMode } from "../settings";
 import { climbersCut } from "../standings";
-import { Input, Label, NativeSelect, NativeSelectOption, Switch } from "../ui";
+import { Input, Label, Switch } from "../ui";
+import { OptionSelect, type Choices } from "./fields";
 import { useServices } from "./services";
 
 /** The Top X size and the chart's options, each saved as soon as it is changed. */
@@ -87,9 +88,6 @@ export function ChartSettings({
     );
 }
 
-/** Each choice of a setting, as its stored value and its label. */
-type Choices<T extends string> = readonly (readonly [value: T, label: string])[];
-
 const Y_AXIS_CHOICES: Choices<ChartOptions["yAxis"]> = [
     ["standing", "Standing"],
     ["scrobbles", "Scrobbles"],
@@ -111,41 +109,3 @@ const LINES_DRAWN_CHOICES: Choices<ChartOptions["linesDrawn"]> = [
     ["no-warm-up", "no warm-up"],
     ["seven-days", "at least 7 Days in Top X"],
 ];
-
-/** A labelled select over a setting's choices, handing back only a value it offered. */
-function OptionSelect<T extends string>({
-    id,
-    label,
-    value,
-    choices,
-    disabled,
-    onChange,
-}: {
-    id: string;
-    label: string;
-    value: T;
-    choices: Choices<T>;
-    disabled?: boolean;
-    onChange: (value: T) => void;
-}) {
-    return (
-        <div className="flex items-center gap-2">
-            <Label htmlFor={id}>{label}</Label>
-            <NativeSelect
-                id={id}
-                value={value}
-                disabled={disabled}
-                onChange={(e) => {
-                    const chosen = choices.find(([choice]) => choice === e.target.value);
-                    if (chosen) onChange(chosen[0]);
-                }}
-            >
-                {choices.map(([choice, text]) => (
-                    <NativeSelectOption key={choice} value={choice}>
-                        {text}
-                    </NativeSelectOption>
-                ))}
-            </NativeSelect>
-        </div>
-    );
-}

@@ -143,10 +143,10 @@ export function createSoundtrackPlayer({
     }
 
     /** The first of the Soundtrack's tracks on Spotify: the Soundtrack, else its fallbacks in turn. */
-    const findTrack = ({ artist, tracks }: Soundtrack) =>
-        tracks.reduce<Promise<SpotifyResult<TrackMatch | undefined>>>(async (previous, track) => {
+    const findTrack = ({ tracks }: Soundtrack) =>
+        tracks.reduce<Promise<SpotifyResult<TrackMatch | undefined>>>(async (previous, name) => {
             const found = await previous;
-            return !found.ok || found.value ? found : lookUp({ artist, track });
+            return !found.ok || found.value ? found : lookUp(name);
         }, Promise.resolve(notFound));
 
     /** Pauses Spotify where the history paused, if it is playing. */

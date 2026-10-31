@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import type { SoundtrackPick } from "../settings";
 import { buildSoundtracks, dayIndex, soundtrackAt, type Soundtracks } from ".";
 
 const uts = (iso: string) => Date.parse(iso) / 1000;
@@ -12,13 +13,18 @@ const plays = (count: number, iso: string, artist: string, track: string) =>
     Array.from({ length: count }, (_, i) => ({ uts: uts(iso) + 60 * i, artist, track }));
 /** The Soundtrack shown on `day`, as "Song — Artist". */
 const shownOn = (soundtracks: Soundtracks, day: number) => {
-    const soundtrack = soundtrackAt(soundtracks, dayIndex(day));
-    return soundtrack && `${soundtrack.tracks[0]} — ${soundtrack.artist}`;
+    const first = soundtrackAt(soundtracks, dayIndex(day))?.tracks[0];
+    return first && `${first.track} — ${first.artist}`;
 };
-const options = (windowDays: number, today = "2026-07-10T12:00:00Z") => ({
+const options = (
+    windowDays: number,
+    pick: SoundtrackPick = "artist",
+    today = "2026-07-10T12:00:00Z",
+) => ({
     timeZone: "UTC",
     today: uts(today),
     windowDays,
+    pick,
 });
 
 describe("Windows", () => {
@@ -57,7 +63,10 @@ describe("Windows", () => {
         );
         // 30 June is now Day 0, so 1–3 July share its Window and 4–7 July make the next.
         expect(shownOn(moved, 0)).toBe("Destiny — Zero 7");
-        expect(soundtrackAt(moved, dayIndex(5))).toMatchObject({ window: 1, artist: "Bonobo" });
+        expect(soundtrackAt(moved, dayIndex(5))).toMatchObject({
+            window: 1,
+            tracks: [{ artist: "Bonobo", track: "Kerala" }],
+        });
     });
 
     test("count Days in the Listener's timezone", () => {
@@ -126,8 +135,11 @@ describe("a Window's Soundtrack", () => {
         );
         expect(soundtrackAt(soundtracks, dayIndex(0))).toEqual({
             window: 0,
-            artist: "Air",
-            tracks: ["Sexy Boy", "Kelly Watch the Stars", "All I Need"],
+            tracks: [
+                { artist: "Air", track: "Sexy Boy" },
+                { artist: "Air", track: "Kelly Watch the Stars" },
+                { artist: "Air", track: "All I Need" },
+            ],
         });
     });
 
@@ -138,10 +150,49 @@ describe("a Window's Soundtrack", () => {
             { ...scrobble("2026-07-01T09:00:00Z", "Air", "Talisman"), album: "Moon Safari" },
             { ...scrobble("2026-07-01T12:00:00Z", "Air", "sexy boy"), album: "Moon Safari" },
         ];
-        expect(soundtrackAt(buildSoundtracks(rows, options(4)), dayIndex(0))?.tracks).toEqual([
-            "Sexy Boy",
-            "Talisman",
-            "sexy boy",
+        const tracks = soundtrackAt(buildSoundtracks(rows, options(4)), dayIndex(0))?.tracks;
+        expect(tracks?.map(({ track }) => track)).toEqual(["Sexy Boy", "Talisman", "sexy boy"]);
+    });
+});
+
+describe("the track pick", () => {
+    // Air's Sexy Boy, Talisman and All I Need tie at 3 Scrobbles, but Bonobo's Kerala has 4.
+    const rows = [
+        ...plays(3, "2026-07-01T10:00:00Z", "Air", "Sexy Boy"),
+        ...plays(3, "2026-07-01T11:00:00Z", "Air", "Talisman"),
+        ...plays(3, "2026-07-01T12:00:00Z", "Air", "All I Need"),
+        ...plays(4, "2026-07-01T14:00:00Z", "Bonobo", "Kerala"),
+    ];
+
+    test("is the most-played track outright, whoever its Artist", () => {
+        expect(soundtrackAt(buildSoundtracks(rows, options(4, "track")), dayIndex(0))).toEqual({
+            window: 0,
+            tracks: [
+                { artist: "Bonobo", track: "Kerala" },
+                { artist: "Air", track: "Sexy Boy" },
+                { artist: "Air", track: "Talisman" },
+            ],
+        });
+    });
+
+    test("is the top Artist's top track under the artist pick, which keeps the Artist's own", () => {
+        expect(shownOn(buildSoundtracks(rows, options(4, "artist")), 0)).toBe("Sexy Boy — Air");
+    });
+
+    test("keeps a track name apart by its Artist", () => {
+        const soundtrack = soundtrackAt(
+            buildSoundtracks(
+                [
+                    ...plays(2, "2026-07-01T10:00:00Z", "Air", "Sexy Boy"),
+                    ...plays(2, "2026-07-01T11:00:00Z", "Bonobo", "Sexy Boy"),
+                ],
+                options(4, "track"),
+            ),
+            dayIndex(0),
+        );
+        expect(soundtrack?.tracks).toEqual([
+            { artist: "Air", track: "Sexy Boy" },
+            { artist: "Bonobo", track: "Sexy Boy" },
         ]);
     });
 });
@@ -181,11 +232,8 @@ describe("ties", () => {
             ],
             options(4),
         );
-        expect(soundtrackAt(soundtracks, dayIndex(0))?.tracks).toEqual([
-            "Sexy Boy",
-            "All I Need",
-            "Talisman",
-        ]);
+        const tracks = soundtrackAt(soundtracks, dayIndex(0))?.tracks;
+        expect(tracks?.map(({ track }) => track)).toEqual(["Sexy Boy", "All I Need", "Talisman"]);
     });
 });
 

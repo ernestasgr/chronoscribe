@@ -1,3 +1,4 @@
+import type { SoundtrackPick } from "../settings";
 import type { DayIndex } from ".";
 import { compareNames, dayIndexer, historyDays } from "./days";
 
@@ -7,13 +8,18 @@ export type WindowIndex = number & { readonly brand: "WindowIndex" };
 /** Brands a whole number of Windows since the history's first Day. */
 export const windowIndex = (index: number): WindowIndex => index as WindowIndex;
 
-/** A Window's Soundtrack: its most-played Artist and their most-played tracks. */
+/** A track by its Artist, as last.fm names them. */
+export interface SoundtrackTrack {
+    artist: string;
+    track: string;
+}
+
+/** A Window's Soundtrack: its most-played tracks, the first played and the rest as fallbacks. */
 export interface Soundtrack {
     /** The Window whose Scrobbles chose it. */
     window: WindowIndex;
-    artist: string;
-    /** The Artist's most-played track names in that Window, best first: the Soundtrack, then fallbacks. */
-    tracks: readonly string[];
+    /** The Soundtrack first, then fallbacks, best first. */
+    tracks: readonly SoundtrackTrack[];
 }
 
 export interface Soundtracks {
@@ -26,61 +32,110 @@ export interface Soundtracks {
 /** How many tracks a Soundtrack lists, so later steps have fallbacks. */
 const CANDIDATE_TRACKS = 3;
 
-interface Tally {
+interface Tally<T> {
+    item: T;
     count: number;
-    /** The second the name reached its count; ties in count go to the earlier one. */
+    /** The second the item reached its count; ties in count go to the earlier one. */
     reachedAt: number;
 }
 
 type SoundtrackScrobble = { uts: number; artist: string; track: string };
 
-/** Each name's Scrobble count among `scrobbles`, with when it reached that count. */
-function tally(
+/** Each distinct item's Scrobble count among `scrobbles`, with when it reached that count. */
+function tally<T>(
     scrobbles: readonly SoundtrackScrobble[],
-    nameOf: (scrobble: SoundtrackScrobble) => string,
-): Map<string, Tally> {
+    keyOf: (scrobble: SoundtrackScrobble) => string,
+    itemOf: (scrobble: SoundtrackScrobble) => T,
+): Tally<T>[] {
     // A hot loop over every Scrobble, so it updates the tallies it owns in place.
-    const tallies = new Map<string, Tally>();
+    const tallies = new Map<string, Tally<T>>();
     for (const scrobble of scrobbles) {
-        const name = nameOf(scrobble);
-        const known = tallies.get(name);
-        if (!known) tallies.set(name, { count: 1, reachedAt: scrobble.uts });
+        const key = keyOf(scrobble);
+        const known = tallies.get(key);
+        if (!known) tallies.set(key, { item: itemOf(scrobble), count: 1, reachedAt: scrobble.uts });
         else {
             known.count++;
             known.reachedAt = Math.max(known.reachedAt, scrobble.uts);
         }
     }
-    return tallies;
+    return [...tallies.values()];
 }
 
-/** Orders as Standings do: more Scrobbles first, then whoever reached the count first, then name. */
-const byPlays = ([nameA, a]: [string, Tally], [nameB, b]: [string, Tally]): number =>
-    b.count - a.count || a.reachedAt - b.reachedAt || compareNames(nameA, nameB);
+/** Orders as Standings do: more Scrobbles first, then whoever reached the count first, then by name. */
+const byPlays =
+    <T>(compareItems: (a: T, b: T) => number) =>
+    (a: Tally<T>, b: Tally<T>): number =>
+        b.count - a.count || a.reachedAt - b.reachedAt || compareItems(a.item, b.item);
 
-/** The `limit` most-played names, best first. */
-const mostPlayed = (tallies: Map<string, Tally>, limit: number): string[] =>
-    [...tallies]
-        .toSorted(byPlays)
+/** The `limit` most-played items, best first. */
+const mostPlayed = <T>(
+    tallies: Tally<T>[],
+    compare: (a: Tally<T>, b: Tally<T>) => number,
+    limit: number,
+): T[] =>
+    tallies
+        .toSorted(compare)
         .slice(0, limit)
-        .map(([name]) => name);
+        .map(({ item }) => item);
 
-/** The most-played name, found in one pass rather than by sorting them all. */
-const top = (tallies: Map<string, Tally>): string | undefined =>
-    [...tallies].reduce<[string, Tally] | undefined>(
-        (best, entry) => (best && byPlays(best, entry) <= 0 ? best : entry),
+/** The most-played item, found in one pass rather than by sorting them all. */
+const top = <T>(
+    tallies: Tally<T>[],
+    compare: (a: Tally<T>, b: Tally<T>) => number,
+): T | undefined =>
+    tallies.reduce<Tally<T> | undefined>(
+        (best, entry) => (best && compare(best, entry) <= 0 ? best : entry),
         undefined,
-    )?.[0];
+    )?.item;
 
-/** The Soundtrack chosen by a non-empty Window's Scrobbles. */
-function soundtrackOf(window: WindowIndex, scrobbles: readonly SoundtrackScrobble[]): Soundtrack {
-    const artist = top(tally(scrobbles, (scrobble) => scrobble.artist));
-    if (artist === undefined) throw new Error(`Window ${window} has no Scrobbles to pick from`);
+const byTrackName = (a: SoundtrackTrack, b: SoundtrackTrack): number =>
+    compareNames(a.track, b.track) || compareNames(a.artist, b.artist);
+
+/** The most-played tracks of the Window's most-played Artist, each by that Artist. */
+const topArtistsTracks = (scrobbles: readonly SoundtrackScrobble[]): SoundtrackTrack[] => {
+    const artist = top(
+        tally(
+            scrobbles,
+            (scrobble) => scrobble.artist,
+            (scrobble) => scrobble.artist,
+        ),
+        byPlays(compareNames),
+    );
+    if (artist === undefined) return [];
     const theirs = scrobbles.filter((scrobble) => scrobble.artist === artist);
-    const tracks = mostPlayed(
-        tally(theirs, (scrobble) => scrobble.track),
+    return mostPlayed(
+        tally(
+            theirs,
+            (scrobble) => scrobble.track,
+            (scrobble) => scrobble.track,
+        ),
+        byPlays(compareNames),
+        CANDIDATE_TRACKS,
+    ).map((track) => ({ artist, track }));
+};
+
+/** The most-played tracks of the Window, whoever their Artist. */
+const topTracks = (scrobbles: readonly SoundtrackScrobble[]): SoundtrackTrack[] =>
+    mostPlayed(
+        tally(
+            scrobbles,
+            // The JSON keeps an Artist and a track apart whatever characters their names hold.
+            ({ artist, track }) => JSON.stringify([artist, track]),
+            ({ artist, track }) => ({ artist, track }),
+        ),
+        byPlays(byTrackName),
         CANDIDATE_TRACKS,
     );
-    return { window, artist, tracks };
+
+/** The Soundtrack chosen by a non-empty Window's Scrobbles, by `pick`. */
+function soundtrackOf(
+    window: WindowIndex,
+    scrobbles: readonly SoundtrackScrobble[],
+    pick: SoundtrackPick,
+): Soundtrack {
+    const tracks = pick === "track" ? topTracks(scrobbles) : topArtistsTracks(scrobbles);
+    if (tracks.length === 0) throw new Error(`Window ${window} has no Scrobbles to pick from`);
+    return { window, tracks };
 }
 
 /** Each Soundtrack, or the last one before it where there is none. */
@@ -102,12 +157,17 @@ const scrobbledSpan = (rows: readonly SoundtrackScrobble[]) =>
 
 /**
  * Cuts the history into back-to-back Windows of `windowDays` Days from its first Day, the last
- * one possibly shorter, and picks each Window's Soundtrack from all of its Scrobbles. Days are
- * counted in `timeZone` through `today`, as `buildStandings` counts them.
+ * one possibly shorter, and picks each Window's Soundtrack from all of its Scrobbles, by `pick`.
+ * Days are counted in `timeZone` through `today`, as `buildStandings` counts them.
  */
 export function buildSoundtracks(
     scrobbles: Iterable<SoundtrackScrobble>,
-    { timeZone, today, windowDays }: { timeZone: string; today: number; windowDays: number },
+    {
+        timeZone,
+        today,
+        windowDays,
+        pick,
+    }: { timeZone: string; today: number; windowDays: number; pick: SoundtrackPick },
 ): Soundtracks {
     const rows = Array.from(scrobbles);
     const epochDayOf = dayIndexer(timeZone);
@@ -119,7 +179,7 @@ export function buildSoundtracks(
     for (const row of rows)
         windows[Math.floor((epochDayOf(row.uts) - firstEpochDay) / windowDays)]?.push(row);
     const own = windows.map((inWindow, i) =>
-        inWindow.length > 0 ? soundtrackOf(windowIndex(i), inWindow) : undefined,
+        inWindow.length > 0 ? soundtrackOf(windowIndex(i), inWindow, pick) : undefined,
     );
     return { windowDays, shown: carriedForward(own) };
 }

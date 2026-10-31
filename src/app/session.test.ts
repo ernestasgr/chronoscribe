@@ -81,6 +81,7 @@ async function setUp(
             timeZone: listener.timeZone,
             today,
             windowDays,
+            pick: "artist",
         });
     const timeline = createTimeline({
         build: async (listener, today, windowDays) => ({

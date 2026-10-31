@@ -8,6 +8,10 @@ export type ClimbersMode = (typeof CLIMBERS_MODES)[number];
 export const Y_AXES = ["standing", "scrobbles"] as const;
 export type YAxis = (typeof Y_AXES)[number];
 
+/** What a Window's Soundtrack is picked from: its most-played Artist's tracks, or its most-played tracks. */
+export const SOUNDTRACK_PICKS = ["artist", "track"] as const;
+export type SoundtrackPick = (typeof SOUNDTRACK_PICKS)[number];
+
 /** Where Standing mode puts Artists below the Top X: a gutter band, off the bottom, or a log axis. */
 export const BELOW_TOP_X = ["gutter", "slide-off", "log"] as const;
 export type BelowTopX = (typeof BELOW_TOP_X)[number];
@@ -56,6 +60,8 @@ export interface AppSettings {
     stepDays: number;
     /** How many Days each Window holds, so each Window gets its own Soundtrack. */
     soundtrackDays: number;
+    /** Whether a Window's Soundtrack is its top Artist's top track, or the most-played track outright. */
+    soundtrackPick: SoundtrackPick;
     /** Whether the Player names the Soundtrack while the history plays. */
     soundtrack: boolean;
 }
@@ -72,6 +78,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     secondsPerDay: 0.1,
     stepDays: 1,
     soundtrackDays: 30,
+    soundtrackPick: "artist",
     soundtrack: false,
 };
 
@@ -88,6 +95,7 @@ const AppSettingsSchema = z.object({
     secondsPerDay: SecondsPerDay.catch(DEFAULT_SETTINGS.secondsPerDay),
     stepDays: StepDays.catch(DEFAULT_SETTINGS.stepDays),
     soundtrackDays: SoundtrackDays.catch(DEFAULT_SETTINGS.soundtrackDays),
+    soundtrackPick: z.enum(SOUNDTRACK_PICKS).catch(DEFAULT_SETTINGS.soundtrackPick),
     soundtrack: z.boolean().catch(DEFAULT_SETTINGS.soundtrack),
 }) satisfies z.ZodType<AppSettings>;
 

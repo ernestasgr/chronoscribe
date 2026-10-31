@@ -40,8 +40,7 @@ const CATALOGUE = [
 
 const soundtrack = (window: number, artist: string, tracks: string[]): Soundtrack => ({
     window: windowIndex(window),
-    artist,
-    tracks,
+    tracks: tracks.map((name) => ({ artist, track: name })),
 });
 
 const PORTISHEAD = soundtrack(0, "Portishead", ["Glory Box", "Roads"]);

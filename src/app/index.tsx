@@ -58,9 +58,12 @@ export async function boot(root: HTMLElement): Promise<void> {
         },
         playback: () => settings.store.getState(),
     });
-    // A new Window size picks the Soundtracks again; the tables stay as they are.
+    // A new Window size or pick picks the Soundtracks again; the tables stay as they are.
     settings.store.subscribe((now, before) => {
-        if (now.soundtrackDays !== before.soundtrackDays) void timeline.repickSoundtracks();
+        const repicks =
+            now.soundtrackDays !== before.soundtrackDays ||
+            now.soundtrackPick !== before.soundtrackPick;
+        if (repicks) void timeline.repickSoundtracks();
     });
     const session = createSession({
         db,
