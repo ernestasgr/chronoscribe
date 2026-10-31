@@ -14,7 +14,7 @@ const WINDOW_PRESETS: readonly DayPreset[] = [
 
 /** The Soundtrack switch and the Window size, with its presets, each saved as soon as it changes. */
 export function SoundtrackSettings() {
-    const { settings } = useServices();
+    const { settings, spotify } = useServices();
     const on = useSettings((s) => s.soundtrack);
     const windowDays = useSettings((s) => s.soundtrackDays);
 
@@ -23,7 +23,11 @@ export function SoundtrackSettings() {
             <Switch
                 id="soundtrack"
                 checked={on}
-                onCheckedChange={(soundtrack) => settings.update({ soundtrack })}
+                onCheckedChange={(soundtrack) => {
+                    settings.update({ soundtrack });
+                    // Signs in first if need be, else unlocks audio on this click.
+                    if (soundtrack) void spotify?.switchedOn();
+                }}
             />
             <Label htmlFor="soundtrack">Soundtrack</Label>
             <div className="flex items-center gap-1">

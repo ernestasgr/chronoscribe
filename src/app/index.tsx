@@ -1,21 +1,42 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { openDb } from "../db";
-import { createEventBus } from "../events";
+import { openDb, type Db } from "../db";
+import { createEventBus, type Emitter } from "../events";
 import { createIngest, type IngestEvents } from "../ingest";
+import { browserSpotify, spotifyClientId } from "../spotify";
 import { createTimeline, createWorkerBuild, TimelineContext } from "../timeline";
 import { App } from "./App";
-import { createFailures } from "./failures";
+import { createConnection, type ConnectionEvents } from "./connection";
+import { createFailures, type Failures } from "./failures";
 import { ServicesContext } from "./services";
 import { createSession } from "./session";
 import { createSettings } from "./settings";
 
+/** The Spotify connection, if the build has a Client ID; it finishes a sign-in Spotify sent back. */
+async function connectSpotify(db: Db, events: Emitter<ConnectionEvents>, failures: Failures) {
+    const clientId = spotifyClientId(import.meta.env);
+    if (clientId === undefined) return undefined;
+    const connection = createConnection({
+        db,
+        port: browserSpotify(),
+        events,
+        failures,
+        clientId,
+        redirectUri: new URL(import.meta.env.BASE_URL, location.origin).toString(),
+        now: Date.now,
+        stored: await db.loadSpotify(),
+    });
+    void connection.finishSignIn(location.href);
+    return connection;
+}
+
 /** The composition root: opens storage, builds every service once and renders the app. */
 export async function boot(root: HTMLElement): Promise<void> {
     const db = openDb();
-    const events = createEventBus<IngestEvents>();
+    const events = createEventBus<IngestEvents & ConnectionEvents>();
     const failures = createFailures();
-    const settings = await createSettings(db, failures);
+    const settings = await createSettings(db, failures, events);
+    const spotify = await connectSpotify(db, events, failures);
     const ingest = createIngest({ db, events });
     const timeline = createTimeline({
         ...createWorkerBuild(),
@@ -45,7 +66,9 @@ export async function boot(root: HTMLElement): Promise<void> {
 
     createRoot(root).render(
         <StrictMode>
-            <ServicesContext value={{ ingest, settings, session, failures, now: Date.now }}>
+            <ServicesContext
+                value={{ ingest, settings, session, failures, spotify, now: Date.now }}
+            >
                 <TimelineContext value={timeline}>
                     <App />
                 </TimelineContext>

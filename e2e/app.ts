@@ -25,7 +25,7 @@ export const bristol: FixtureUser = {
 export async function serveLastfm(page: Page, users: FixtureUser[]) {
     const lastfmRequests: URL[] = [];
     // Anything leaving the machine other than to the fake last.fm is refused.
-    await page.route(/^https?:\/\/(?!localhost[:/])/, (route) => route.abort());
+    await page.route(/^https?:\/\/(?!127\.0\.0\.1[:/])/, (route) => route.abort());
     await page.route(`${LASTFM_ORIGIN}/**`, (route) => {
         const url = new URL(route.request().url());
         lastfmRequests.push(url);

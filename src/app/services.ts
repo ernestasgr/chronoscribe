@@ -2,6 +2,7 @@ import { createContext, useContext } from "react";
 import { useStore } from "zustand";
 import type { AppSettings } from "../settings";
 import type { Ingest, IngestState } from "../ingest";
+import type { Connection, ConnectionState } from "./connection";
 import type { Failures, FailuresState } from "./failures";
 import type { Session, SessionState } from "./session";
 import type { Settings } from "./settings";
@@ -12,6 +13,8 @@ export interface Services {
     settings: Settings;
     session: Session;
     failures: Failures;
+    /** The Spotify connection, or none if the build has no Spotify Client ID. */
+    spotify: Connection | undefined;
     /** The clock that labels counting from now, such as the sync age, read. */
     now: () => number;
 }
@@ -35,3 +38,8 @@ export const useFailures = <T>(select: (state: FailuresState) => T): T =>
 
 export const useQueue = <T>(select: (state: IngestState) => T): T =>
     useStore(useServices().ingest.store, select);
+
+export const useConnection = <T>(
+    connection: Connection,
+    select: (state: ConnectionState) => T,
+): T => useStore(connection.store, select);

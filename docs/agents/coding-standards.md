@@ -16,7 +16,7 @@ The principles and patterns every change in this codebase follows. A ticket's ac
 ## Modules
 
 - Each module is a directory `src/<module>/` with one public surface, `index.ts`. Other modules import only through it.
-- Dependencies point downward, lowest first: `events`, `ui`, `lastfm`, `settings`, `db`, `ingest`, `standings`, `timeline`, `chart`, `app`. Adding a module means placing it in this order.
+- Dependencies point downward, lowest first: `events`, `ui`, `lastfm`, `settings`, `spotify`, `db`, `ingest`, `standings`, `timeline`, `chart`, `app`. Adding a module means placing it in this order.
 - Each module owns its concern: `db` is the only code that touches IndexedDB (apart from the worker's read), and `standings` (plus the chart's line loop) is the only code that reads the raw table arrays.
 - A concept's vocabulary (its types, options, limits and defaults) lives in the module that owns the concept, not the one that stores or draws it. `db` persists settings; `settings` defines them.
 - `src/architecture.test.ts` enforces all of the above. Extend it whenever a new rule of this kind appears.
@@ -87,10 +87,10 @@ The principles and patterns every change in this codebase follows. A ticket's ac
 
 - Test only through public interfaces, checking what a user or a calling module can observe: what is shown, what is stored, what is emitted. A test should survive a rewrite of the internals.
 - There are three seams:
-  1. **The app at its network boundary (Playwright):** the real app and real IndexedDB, with only last.fm faked, by route.
+  1. **The app at its network boundary (Playwright):** the real app and real IndexedDB, with only last.fm and Spotify faked, by route.
   2. **Services at their interface (Vitest):** fake transport, `fake-indexeddb`, and a fake clock and sleep.
   3. **The pure core (Vitest):** plain function tests, plus benchmarks that guard the performance budgets.
-- Tests never call the real last.fm API.
+- Tests never call the real last.fm or Spotify APIs.
 - Write tests first (red, green, refactor) where the behaviour is new. A bug fix starts with a test that fails without it.
 - A change is done only when `pnpm check` and `pnpm e2e` pass. The pre-commit hook runs `pnpm check`; CI runs both. When a refactor breaks an e2e test, find the commit that broke it rather than changing the test to fit.
 - A UI change is done only once you have used it in the running app (`app` in `.claude/launch.json`), starting from the default view a fresh import lands on, not only the state an e2e test sets up.

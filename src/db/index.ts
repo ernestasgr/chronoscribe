@@ -2,6 +2,7 @@ import { Dexie, type EntityTable } from "dexie";
 import { z } from "zod";
 import { unixSeconds, type UnixSeconds } from "../lastfm";
 import { parseSettings, type AppSettings } from "../settings";
+import { parseStoredSpotify, type StoredSpotify } from "../spotify";
 
 /** A Listener's key: their last.fm username, lowercased. */
 export type ListenerId = string & { readonly brand: "ListenerId" };
@@ -55,11 +56,14 @@ const parseListener = (row: unknown): ListenerRow | undefined => {
 };
 
 const SETTINGS_ID = "app";
+/** The id of the one Spotify connection row: the whole app shares it, whichever Listener is viewed. */
+const SPOTIFY_ID = "app";
 
 type ChronoscribeDexie = Dexie & {
     appSettings: EntityTable<AppSettings & { id: string }, "id">;
     listeners: EntityTable<ListenerRow, "id">;
     scrobbles: EntityTable<ScrobbleRow, "id">;
+    spotify: EntityTable<StoredSpotify & { id: string }, "id">;
 };
 
 function openDexie(name: string): ChronoscribeDexie {
@@ -70,6 +74,7 @@ function openDexie(name: string): ChronoscribeDexie {
         listeners: "id",
         scrobbles: "++id, [listenerId+uts]",
     });
+    dexie.version(2).stores({ spotify: "id" });
     return dexie;
 }
 
@@ -90,6 +95,19 @@ export function openDb(name = "chronoscribe") {
 
         async saveSettings(settings: AppSettings): Promise<void> {
             await dexie.appSettings.put({ ...settings, id: SETTINGS_ID });
+        },
+
+        /** The Spotify connection, checked as it is read; none if missing or malformed. */
+        async loadSpotify(): Promise<StoredSpotify | undefined> {
+            return parseStoredSpotify(await dexie.spotify.get(SPOTIFY_ID));
+        },
+
+        async saveSpotify(connection: StoredSpotify): Promise<void> {
+            await dexie.spotify.put({ ...connection, id: SPOTIFY_ID });
+        },
+
+        async clearSpotify(): Promise<void> {
+            await dexie.spotify.delete(SPOTIFY_ID);
         },
 
         async listener(id: ListenerId): Promise<ListenerRow | undefined> {
