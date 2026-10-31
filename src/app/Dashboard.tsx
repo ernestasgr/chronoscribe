@@ -54,7 +54,7 @@ export function Dashboard({ listener }: { listener: ListenerRow }) {
     if (!tables) return <Building username={username} />;
 
     return (
-        <main className="grid min-h-svh grid-rows-[auto_minmax(20rem,1fr)_auto] gap-4 p-4 lg:h-svh lg:grid-cols-[1fr_22rem] lg:grid-rows-[auto_1fr]">
+        <main className="grid min-h-svh grid-rows-[auto_minmax(20rem,1fr)_auto] gap-4 p-4 lg:h-svh lg:grid-cols-[1fr_22rem] lg:grid-rows-[auto_1fr] 2xl:grid-cols-[1fr_34rem]">
             <Toolbar
                 listener={listener}
                 tables={tables}

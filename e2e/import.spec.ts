@@ -19,13 +19,13 @@ test("imports a Listener and shows the Top X for a chosen Day", async ({ page })
     await focusOnBristol(page, "2026-07-03");
     await expect
         .poll(() => topX(page))
-        .toEqual(["#1 Portishead · 650", "#2 Massive Attack · 600", "#3 Tricky · 200"]);
+        .toEqual(["#1 Portishead +150 650", "#2 Massive Attack +0 600", "#3 Tricky +100 200"]);
 
     // Massive Attack draws level on 4 July, but Portishead reached 650 first.
     await focusOnBristol(page, "2026-07-04");
     await expect
         .poll(() => topX(page))
-        .toEqual(["#1 Portishead · 650", "#2 Massive Attack · 650", "#3 Tricky · 200"]);
+        .toEqual(["#1 Portishead +0 650", "#2 Massive Attack +50 650", "#3 Tricky +0 200"]);
 });
 
 test("X is a setting that survives a reload", async ({ page }) => {
@@ -36,12 +36,16 @@ test("X is a setting that survives a reload", async ({ page }) => {
 
     await page.getByRole("spinbutton", { name: "X" }).fill("2");
     await focusOnBristol(page, "2026-07-03");
-    await expect.poll(() => topX(page)).toEqual(["#1 Portishead · 650", "#2 Massive Attack · 600"]);
+    await expect
+        .poll(() => topX(page))
+        .toEqual(["#1 Portishead +150 650", "#2 Massive Attack +0 600"]);
 
     await page.reload();
     await expect(page.getByRole("spinbutton", { name: "X" })).toHaveValue("2");
     await focusOnBristol(page, "2026-07-03");
-    await expect.poll(() => topX(page)).toEqual(["#1 Portishead · 650", "#2 Massive Attack · 600"]);
+    await expect
+        .poll(() => topX(page))
+        .toEqual(["#1 Portishead +150 650", "#2 Massive Attack +0 600"]);
 });
 
 test("reloading mid-import resumes it and finishes with every Scrobble", async ({ page }) => {
@@ -75,5 +79,5 @@ test("reloading mid-import resumes it and finishes with every Scrobble", async (
     await focusOnBristol(page, "2026-07-04");
     await expect
         .poll(() => topX(page))
-        .toEqual(["#1 Portishead · 650", "#2 Massive Attack · 650", "#3 Tricky · 200"]);
+        .toEqual(["#1 Portishead +0 650", "#2 Massive Attack +50 650", "#3 Tricky +0 200"]);
 });

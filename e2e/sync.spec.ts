@@ -27,7 +27,7 @@ async function importedThenReopened(page: Page) {
     await focusOn(page, "2026-07-03", "2026-07-01");
     await expect
         .poll(() => topX(page))
-        .toEqual(["#1 Portishead · 650", "#2 Massive Attack · 600", "#3 Tricky · 200"]);
+        .toEqual(["#1 Portishead +150 650", "#2 Massive Attack +0 600", "#3 Tricky +100 200"]);
 }
 
 test("Sync reconciles the recent window and extends to today, keeping the Focus Day", async ({
@@ -53,11 +53,11 @@ test("Sync reconciles the recent window and extends to today, keeping the Focus 
     await expect(page.getByText("Synced just now")).toBeVisible();
     await expect(page.getByRole("status", { name: "Syncing" })).toBeHidden();
     await expect(focusDay(page).getByRole("heading", { level: 2 })).toHaveText("2026-07-03");
-    await expect.poll(() => topX(page)).toEqual(["#1 Portishead · 650", "#2 Tricky · 200"]);
+    await expect.poll(() => topX(page)).toEqual(["#1 Portishead +150 650", "#2 Tricky +100 200"]);
 
     await page.getByRole("slider", { name: "Focus Day" }).press("End");
     await expect(focusDay(page).getByRole("heading", { level: 2 })).toHaveText("2026-07-13");
-    await expect.poll(() => topX(page)).toContain("#1 Burial · 700");
+    await expect.poll(() => topX(page)).toContain("#1 Burial +0 700");
 });
 
 test("a failed Sync changes nothing and offers Retry", async ({ page }) => {
@@ -81,12 +81,12 @@ test("a failed Sync changes nothing and offers Retry", async ({ page }) => {
     await expect(focusDay(page).getByRole("heading", { level: 2 })).toHaveText("2026-07-03");
     await expect
         .poll(() => topX(page))
-        .toEqual(["#1 Portishead · 650", "#2 Massive Attack · 600", "#3 Tricky · 200"]);
+        .toEqual(["#1 Portishead +150 650", "#2 Massive Attack +0 600", "#3 Tricky +100 200"]);
 
     failing = false;
     await toast.getByRole("button", { name: "Retry" }).click();
 
     await expect(toast).toBeHidden();
     await expect(page.getByText("Synced just now")).toBeVisible();
-    await expect.poll(() => topX(page)).toEqual(["#1 Portishead · 650", "#2 Tricky · 200"]);
+    await expect.poll(() => topX(page)).toEqual(["#1 Portishead +150 650", "#2 Tricky +100 200"]);
 });

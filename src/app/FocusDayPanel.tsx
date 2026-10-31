@@ -48,9 +48,11 @@ export function FocusDayPanel({
                 </p>
             </header>
             <Separator />
-            <TopX tables={tables} day={day} x={x} />
-            <Separator />
-            <Climbers tables={tables} day={day} x={x} mode={mode} />
+            <div className="grid gap-4 2xl:grid-cols-2 2xl:gap-6">
+                <TopX tables={tables} day={day} x={x} />
+                <Separator className="2xl:hidden" />
+                <Climbers tables={tables} day={day} x={x} mode={mode} />
+            </div>
         </Card>
     );
 }
@@ -75,24 +77,29 @@ function TopX({ tables, day, x }: { tables: StandingsTables; day: DayIndex; x: n
                                 #{row.standing}
                             </span>{" "}
                             <span className="flex-1 truncate font-medium">{row.artist}</span>{" "}
-                            <span className="text-muted-foreground tabular-nums">
-                                · {row.cumulative.toLocaleString("en")}
+                            <span className="font-medium tabular-nums">
+                                +{row.dailyPlays.toLocaleString("en")}
+                            </span>
+                        </div>{" "}
+                        <div className="ml-10 flex items-center gap-2">
+                            <span
+                                role="meter"
+                                aria-label="Daily plays"
+                                aria-valuenow={row.dailyPlays}
+                                aria-valuemin={0}
+                                aria-valuemax={most}
+                                title={count(row.dailyPlays, "Daily play")}
+                                className="block h-1 flex-1 overflow-hidden rounded-full bg-muted"
+                            >
+                                <span
+                                    className="block h-full rounded-full bg-primary transition-[width] duration-300 ease-in-out"
+                                    style={{ width: `${(100 * row.dailyPlays) / most}%` }}
+                                />
+                            </span>
+                            <span className="text-xs text-muted-foreground tabular-nums">
+                                {row.cumulative.toLocaleString("en")}
                             </span>
                         </div>
-                        <span
-                            role="meter"
-                            aria-label="Daily plays"
-                            aria-valuenow={row.dailyPlays}
-                            aria-valuemin={0}
-                            aria-valuemax={most}
-                            title={count(row.dailyPlays, "Daily play")}
-                            className="ml-10 block h-1 overflow-hidden rounded-full bg-muted"
-                        >
-                            <span
-                                className="block h-full rounded-full bg-primary transition-[width] duration-300 ease-in-out"
-                                style={{ width: `${(100 * row.dailyPlays) / most}%` }}
-                            />
-                        </span>
                     </li>
                 ))}
             </ol>
