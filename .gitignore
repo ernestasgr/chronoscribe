@@ -4,3 +4,4 @@ test-results
 playwright-report
 .scratch
 .claude/worktrees
+.env*.local
