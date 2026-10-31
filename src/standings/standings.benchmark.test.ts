@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+    buildSoundtracks,
     buildStandings,
     climbers,
     dailyPlays,
@@ -29,7 +30,7 @@ function random(seed: number): () => number {
  * A history shaped like the measured one: about 100k Scrobbles of 1,300 Artists over
  * 2,400 Days, 29% of them empty, with a few Artists taking most of the plays.
  */
-function syntheticHistory(): { uts: number; artist: string }[] {
+function syntheticHistory(): { uts: number; artist: string; track: string }[] {
     const next = random(2339);
     const start = Date.parse("2020-01-01T00:00:00Z") / 1000;
     const listeningDays = Array.from({ length: DAYS }, (_, day) => day).filter(
@@ -41,6 +42,8 @@ function syntheticHistory(): { uts: number; artist: string }[] {
         return {
             uts: start + day * DAY_SECONDS + Math.floor(next() * DAY_SECONDS),
             artist: `Artist ${String(artist).padStart(4, "0")}`,
+            // From the index, not the PRNG, so the rest of the fixture stays as measured.
+            track: `Track ${i % 23}`,
         };
     });
 }
@@ -66,6 +69,13 @@ describe("benchmark on a history shaped like the measured one", () => {
 
     test("a full rebuild takes under 1 s", () => {
         expect(rebuild).toBeLessThan(1_000);
+    });
+
+    test("the Soundtracks for 1-Day or 30-Day Windows build in under 300 ms", () => {
+        for (const windowDays of [1, 30])
+            expect(time(() => buildSoundtracks(history, { ...options, windowDays }))).toBeLessThan(
+                300,
+            );
     });
 
     test("a Focus Day report takes under 5 ms", () => {

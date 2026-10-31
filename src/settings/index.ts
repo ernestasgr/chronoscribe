@@ -26,6 +26,8 @@ export const TOP_X = { min: 1, max: 100 } as const;
 export const SECONDS_PER_DAY = { min: 0.02, max: 2 } as const;
 /** The step sizes offered, in Days. */
 export const STEP_DAYS = { min: 1, max: 365 } as const;
+/** The Window sizes offered, in Days. */
+export const SOUNDTRACK_DAYS = { min: 1, max: 3650 } as const;
 
 /** A Top X size, for the stored row and for what the user types alike. */
 export const TopXSize = z.number().int().min(TOP_X.min).max(TOP_X.max);
@@ -33,8 +35,10 @@ export const TopXSize = z.number().int().min(TOP_X.min).max(TOP_X.max);
 export const SecondsPerDay = z.number().min(SECONDS_PER_DAY.min).max(SECONDS_PER_DAY.max);
 /** A step size, for the stored row and for what the user types alike. */
 export const StepDays = z.number().int().min(STEP_DAYS.min).max(STEP_DAYS.max);
+/** A Window size, for the stored row and for what the user types alike. */
+export const SoundtrackDays = z.number().int().min(SOUNDTRACK_DAYS.min).max(SOUNDTRACK_DAYS.max);
 
-/** The app-wide settings: the last.fm API key, the chart's options and the player's. */
+/** The app-wide settings: the last.fm API key, the chart's options and the Player's. */
 export interface AppSettings {
     apiKey: string;
     /** How many Artists the Top X shows. */
@@ -50,6 +54,10 @@ export interface AppSettings {
     secondsPerDay: number;
     /** How many Days the step control and the `,` and `.` keys move by. */
     stepDays: number;
+    /** How many Days each Window holds, so each Window gets its own Soundtrack. */
+    soundtrackDays: number;
+    /** Whether the Player names the Soundtrack while the history plays. */
+    soundtrack: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -63,6 +71,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     hideFuture: true,
     secondsPerDay: 0.1,
     stepDays: 1,
+    soundtrackDays: 30,
+    soundtrack: false,
 };
 
 /** Stored settings; anything missing or unknown takes its default, field by field. */
@@ -77,6 +87,8 @@ const AppSettingsSchema = z.object({
     hideFuture: z.boolean().catch(DEFAULT_SETTINGS.hideFuture),
     secondsPerDay: SecondsPerDay.catch(DEFAULT_SETTINGS.secondsPerDay),
     stepDays: StepDays.catch(DEFAULT_SETTINGS.stepDays),
+    soundtrackDays: SoundtrackDays.catch(DEFAULT_SETTINGS.soundtrackDays),
+    soundtrack: z.boolean().catch(DEFAULT_SETTINGS.soundtrack),
 }) satisfies z.ZodType<AppSettings>;
 
 /** Settings read back from storage; a missing row reads as the defaults. */

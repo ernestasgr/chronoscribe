@@ -8,8 +8,11 @@ import type { IngestEvents } from "../ingest";
 import {
     dayIndex,
     firstDayShift,
+    soundtrackAt,
     type DayIndex,
     type DayWindow,
+    type Soundtrack,
+    type Soundtracks,
     type StandingsTables,
 } from "../standings";
 import type { StandingsWorker } from "./standings.worker";
@@ -25,7 +28,7 @@ export interface ListenerRef {
     timeZone: string;
 }
 
-/** Where the latest build of the tables is: none under way, running, or failed. */
+/** Where the latest build of the tables, or pick of the Soundtracks, is: none under way, running, or failed. */
 export type BuildStatus =
     | { kind: "idle" }
     | { kind: "running" }
@@ -35,25 +38,51 @@ export interface TimelineState extends ViewState {
     /** The Listener whose tables the timeline holds. */
     listener: ListenerRef | undefined;
     tables: StandingsTables | undefined;
+    /** Each Window's Soundtrack, picked for the Window size in the settings. */
+    soundtracks: Soundtracks | undefined;
     build: BuildStatus;
+    /** Where the latest pick of the Soundtracks alone, for a new Window size, is. */
+    pick: BuildStatus;
     /** The latest build started; an older build's result is dropped. */
     buildId: number;
+    /** The latest Soundtrack pick started, by a build or alone; an older pick's result is dropped. */
+    pickId: number;
 }
 
-/** Builds a Listener's Standings tables as of `today` (Unix seconds). */
-export type BuildStandings = (listener: ListenerRef, today: number) => Promise<StandingsTables>;
+/** What one build makes of a Listener's Scrobbles: their tables and each Window's Soundtrack. */
+export interface Projection {
+    tables: StandingsTables;
+    soundtracks: Soundtracks;
+}
+
+/** Builds a Listener's tables and Soundtracks as of `today` (Unix seconds), in `windowDays` Windows. */
+export type BuildProjection = (
+    listener: ListenerRef,
+    today: number,
+    windowDays: number,
+) => Promise<Projection>;
+
+/** Picks a Listener's Soundtracks alone, for when only the Window size has changed. */
+export type BuildSoundtracks = (
+    listener: ListenerRef,
+    today: number,
+    windowDays: number,
+) => Promise<Soundtracks>;
 
 /** Calls `callback` with the frame's time in ms before the next paint; returns a cancel. */
 export type RequestFrame = (callback: (at: number) => void) => () => void;
 
 /** The playback settings, read when they are needed. */
-export type Playback = () => Pick<AppSettings, "secondsPerDay" | "stepDays">;
+export type Playback = () => Pick<AppSettings, "secondsPerDay" | "stepDays" | "soundtrackDays">;
 
 const INITIAL: TimelineState = {
     listener: undefined,
     tables: undefined,
+    soundtracks: undefined,
     build: { kind: "idle" },
+    pick: { kind: "idle" },
     buildId: 0,
+    pickId: 0,
     playhead: 0,
     window: { start: 0, end: 0 },
     motion: { kind: "still" },
@@ -101,19 +130,37 @@ const afterViewEvent = (state: TimelineState, event: ViewEvent): Partial<Timelin
 };
 
 export interface TimelineDeps {
-    build: BuildStandings;
+    build: BuildProjection;
+    buildSoundtracks: BuildSoundtracks;
     events: Subscriber<IngestEvents>;
     now: () => number;
     requestFrame: RequestFrame;
     playback: Playback;
 }
 
+/** What a build or pick came to: its value, or why it failed. */
+type Attempt<T> = { ok: true; value: T } | { ok: false; error: string };
+
+/** Settles `promise` as an attempt, so its failure is kept as a value rather than thrown. */
+const attempt = <T>(promise: Promise<T>): Promise<Attempt<T>> =>
+    promise.then(
+        (value) => ({ ok: true, value }) as const,
+        (error: unknown) => ({ ok: false, error: String(error) }) as const,
+    );
+
 /**
- * The main thread's hold on the current Listener's tables (build, swap, drop stale results) and
- * the view store, with the player that moves it frame by frame while playing or gliding.
- * Rebuilds whenever ingest changes the current Listener's Scrobbles.
+ * The main thread's hold on the current Listener's tables and Soundtracks (build, swap, drop
+ * stale results) and the view store, with the player that moves it frame by frame while playing
+ * or gliding. Rebuilds whenever ingest changes the current Listener's Scrobbles.
  */
-export function createTimeline({ build, events, now, requestFrame, playback }: TimelineDeps) {
+export function createTimeline({
+    build,
+    buildSoundtracks,
+    events,
+    now,
+    requestFrame,
+    playback,
+}: TimelineDeps) {
     const store: StoreApi<TimelineState> = createStore<TimelineState>(() => INITIAL);
     const dispatch = (event: ViewEvent) => store.setState((state) => afterViewEvent(state, event));
     let cancelFrame: (() => void) | undefined;
@@ -128,32 +175,66 @@ export function createTimeline({ build, events, now, requestFrame, playback }: T
     };
     const stopAnimating = store.subscribe(animate);
 
-    /** Builds the Listener's tables; never rejects, as a failure is kept in `build`. */
+    const today = () => Math.floor(now() / 1000);
+    const windowDays = () => playback().soundtrackDays;
+
+    /**
+     * Builds the Listener's tables and Soundtracks; never rejects, as a failure is kept in
+     * `build`. Its Soundtracks are dropped if the Window size changed while it ran.
+     */
     async function rebuild(listener: ListenerRef): Promise<void> {
         const buildId = store.getState().buildId + 1;
-        store.setState({ buildId, build: { kind: "running" } });
-        const built = await build(listener, Math.floor(now() / 1000)).then(
-            (tables) => ({ ok: true, tables }) as const,
-            (error: unknown) => ({ ok: false, message: String(error) }) as const,
-        );
+        const pickId = store.getState().pickId + 1;
+        store.setState({ buildId, pickId, build: { kind: "running" } });
+        const built = await attempt(build(listener, today(), windowDays()));
         if (store.getState().buildId !== buildId) return;
         store.setState((state) =>
             built.ok
-                ? { ...swapIn(state, built.tables), build: { kind: "idle" } }
-                : { build: { kind: "failed", message: built.message } },
+                ? {
+                      ...swapIn(state, built.value.tables),
+                      ...(state.pickId === pickId
+                          ? { soundtracks: built.value.soundtracks, pick: { kind: "idle" } }
+                          : {}),
+                      build: { kind: "idle" },
+                  }
+                : { build: { kind: "failed", message: built.error } },
+        );
+    }
+
+    /**
+     * Picks the held Listener's Soundtracks again for the Window size now set, keeping their
+     * tables; never rejects, as a failure is kept in `pick`.
+     */
+    async function repickSoundtracks(): Promise<void> {
+        const { listener } = store.getState();
+        if (!listener) return;
+        const pickId = store.getState().pickId + 1;
+        store.setState({ pickId, pick: { kind: "running" } });
+        const picked = await attempt(buildSoundtracks(listener, today(), windowDays()));
+        if (store.getState().pickId !== pickId) return;
+        store.setState(
+            picked.ok
+                ? { soundtracks: picked.value, pick: { kind: "idle" } }
+                : { pick: { kind: "failed", message: picked.error } },
         );
     }
 
     /** Makes `listener` the one whose tables the timeline holds, rebuilding them. */
     function show(listener: ListenerRef): void {
         const switching = store.getState().listener?.id !== listener.id;
-        store.setState(switching ? { listener, tables: undefined } : { listener });
+        store.setState(
+            switching ? { listener, tables: undefined, soundtracks: undefined } : { listener },
+        );
         void rebuild(listener);
     }
 
     /** Lets go of the Listener and their tables, dropping any build still running. */
     function clear(): void {
-        store.setState(({ buildId }) => ({ ...INITIAL, buildId: buildId + 1 }));
+        store.setState(({ buildId, pickId }) => ({
+            ...INITIAL,
+            buildId: buildId + 1,
+            pickId: pickId + 1,
+        }));
     }
 
     /** Builds the held Listener's tables again, such as after a failed build. */
@@ -162,7 +243,7 @@ export function createTimeline({ build, events, now, requestFrame, playback }: T
         if (listener) void rebuild(listener);
     }
 
-    const dispose = events.on("scrobblesChanged", ({ listenerId }) => {
+    const stopRebuilding = events.on("scrobblesChanged", ({ listenerId }) => {
         const { listener } = store.getState();
         if (listener?.id === listenerId) void rebuild(listener);
     });
@@ -172,8 +253,9 @@ export function createTimeline({ build, events, now, requestFrame, playback }: T
         show,
         clear,
         retry,
+        repickSoundtracks,
         dispose: () => {
-            dispose();
+            stopRebuilding();
             stopAnimating();
             cancelFrame?.();
         },
@@ -205,12 +287,17 @@ export function createTimeline({ build, events, now, requestFrame, playback }: T
 
 export type Timeline = ReturnType<typeof createTimeline>;
 
-/** Builds tables in a Web Worker that reads Dexie itself and hands them back zero-copy. */
-export function createWorkerBuild(): BuildStandings {
+/** Builds in a Web Worker that reads Dexie itself and hands the tables back zero-copy. */
+export function createWorkerBuild(): Pick<TimelineDeps, "build" | "buildSoundtracks"> {
     const worker = Comlink.wrap<StandingsWorker>(
         new Worker(new URL("./standings.worker.ts", import.meta.url), { type: "module" }),
     );
-    return (listener, today) => worker.build(listener.id, listener.timeZone, today);
+    return {
+        build: (listener, today, windowDays) =>
+            worker.build(listener.id, listener.timeZone, today, windowDays),
+        buildSoundtracks: (listener, today, windowDays) =>
+            worker.soundtracks(listener.id, listener.timeZone, today, windowDays),
+    };
 }
 
 /** Provides the app's timeline to the components below. */
@@ -233,6 +320,15 @@ export const useBuild = (): BuildStatus => useTimelineState((s) => s.build);
 /** The Focus Day: the Day nearest the playhead. */
 export const useFocusDay = (): DayIndex =>
     useTimelineState((s) => dayIndex(Math.round(s.playhead)));
+
+/** The Soundtrack of the Focus Day's Window, or the last one before an empty Window. */
+export const useSoundtrack = (): Soundtrack | undefined =>
+    useTimelineState(
+        (s) => s.soundtracks && soundtrackAt(s.soundtracks, dayIndex(Math.round(s.playhead))),
+    );
+
+/** Where the latest pick of the Soundtracks alone is. */
+export const usePick = (): BuildStatus => useTimelineState((s) => s.pick);
 
 /** Whether the history is playing. */
 export const usePlaying = (): boolean => useTimelineState((s) => s.motion.kind === "playing");

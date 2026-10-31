@@ -6,8 +6,8 @@ import { listenerId, openDb, type Db } from "../db";
 import { unixSeconds, unixSecondsAt } from "../lastfm";
 import { createEventBus } from "../events";
 import { createIngest, type IngestEvents, type Job, type Outcome } from "../ingest";
-import { buildStandings } from "../standings";
-import { createTimeline } from "../timeline";
+import { buildSoundtracks, buildStandings } from "../standings";
+import { createTimeline, type ListenerRef } from "../timeline";
 import { createFailures } from "./failures";
 import { createSession, transition, viewedListener, type SessionState } from "./session";
 import { createSettings } from "./settings";
@@ -75,12 +75,21 @@ async function setUp(
             },
         },
     });
+    const soundtracksOf = async (listener: ListenerRef, today: number, windowDays: number) =>
+        buildSoundtracks(await db.scrobblesOf(listener.id), {
+            timeZone: listener.timeZone,
+            today,
+            windowDays,
+        });
     const timeline = createTimeline({
-        build: async (listener, today) =>
-            buildStandings(await db.scrobblesOf(listener.id), {
+        build: async (listener, today, windowDays) => ({
+            tables: buildStandings(await db.scrobblesOf(listener.id), {
                 timeZone: listener.timeZone,
                 today,
             }),
+            soundtracks: await soundtracksOf(listener, today, windowDays),
+        }),
+        buildSoundtracks: soundtracksOf,
         events,
         now: () => NOW,
         requestFrame: () => () => {},

@@ -100,8 +100,11 @@ test.describe("Settings", () => {
 
         await page.getByRole("button", { name: "Settings" }).click();
         // 08:00 UTC on 1 July is 22:00 on 30 June in Honolulu.
+        await expect(slider).toHaveAttribute("aria-valuemax", "9");
         await page.getByRole("combobox", { name: "Timezone" }).selectOption("Pacific/Honolulu");
 
+        // The rebuild has landed once 30 June adds a Day; Home pressed before then finds 1 July.
+        await expect(slider).toHaveAttribute("aria-valuemax", "10");
         await slider.press("Home");
         await expect(focusDate).toHaveText("2026-06-30");
         await page.reload();

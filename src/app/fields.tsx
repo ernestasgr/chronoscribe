@@ -1,4 +1,5 @@
 import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import type { z } from "zod";
 import { Button, Input, Label, NativeSelect, NativeSelectOption } from "../ui";
 import { useServices, useSession, useSettings } from "./services";
 import type { SetupProblem } from "./session";
@@ -172,5 +173,83 @@ export function ApiKeyForm({ id, username }: { id: string; username: string }) {
                 </p>
             )}
         </form>
+    );
+}
+
+/** A preset number of Days, by its label. */
+export type DayPreset = readonly [label: string, days: number];
+
+/** A row of preset Day counts, the one matching `value` pressed; `name` names each, if its label can't alone. */
+export function DayPresets({
+    presets,
+    value,
+    onChoose,
+    name,
+}: {
+    presets: readonly DayPreset[];
+    value: number;
+    onChoose: (days: number) => void;
+    name?: (label: string) => string;
+}) {
+    return presets.map(([label, days]) => (
+        <Button
+            key={label}
+            variant={value === days ? "secondary" : "ghost"}
+            size="xs"
+            aria-label={name?.(label)}
+            aria-pressed={value === days}
+            onClick={() => onChoose(days)}
+        >
+            {label}
+        </Button>
+    ));
+}
+
+/**
+ * A number input for a setting that keeps what is being typed, saving it only once it is valid,
+ * so passing through an invalid value such as "0." on the way to "0.05" doesn't reset it.
+ */
+export function NumberSetting({
+    id,
+    label,
+    value,
+    min,
+    max,
+    step,
+    schema,
+    onChange,
+    className,
+}: {
+    id?: string;
+    label?: string;
+    value: number;
+    min: number;
+    max: number;
+    step: number;
+    /** The rule a typed value must pass before it is saved. */
+    schema: z.ZodType<number>;
+    onChange: (value: number) => void;
+    className?: string;
+}) {
+    const [draft, setDraft] = useState<string>();
+    return (
+        <Input
+            id={id}
+            aria-label={label}
+            type="number"
+            min={min}
+            max={max}
+            step={step}
+            value={draft ?? String(value)}
+            className={className}
+            onChange={(e) => {
+                setDraft(e.target.value);
+                const typed = schema.safeParse(
+                    e.target.value === "" ? Number.NaN : Number(e.target.value),
+                );
+                if (typed.success) onChange(typed.data);
+            }}
+            onBlur={() => setDraft(undefined)}
+        />
     );
 }
