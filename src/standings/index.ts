@@ -1,4 +1,14 @@
 import type { ClimbersMode, LinesRule, YAxis } from "../settings";
+import { compareNames, DAY_SECONDS, dayIndexer, historyDays, isoDate } from "./days";
+
+export {
+    buildSoundtracks,
+    soundtrackAt,
+    windowIndex,
+    type Soundtrack,
+    type Soundtracks,
+    type WindowIndex,
+} from "./soundtracks";
 
 /** The Standing stored for an Artist who has no Scrobbles yet on a Day. */
 export const UNRANKED = 0xffff;
@@ -37,37 +47,6 @@ export interface TopXRow {
     cumulative: number;
 }
 
-const DAY_SECONDS = 86_400;
-// Local dates are cached per quarter-hour: every modern offset is a whole number of them.
-const QUARTER_HOUR = 900;
-
-function dayIndexer(timeZone: string) {
-    const format = new Intl.DateTimeFormat("en-CA", {
-        timeZone,
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-    });
-    const epochDayAt = (uts: number) => Date.parse(format.format(uts * 1000)) / 1000 / DAY_SECONDS;
-    // Each quarter-hour's local date, or NaN for one that straddles local midnight.
-    const cache = new Map<number, number>();
-    // Days since the Unix epoch of the local calendar date holding `uts`.
-    return (uts: number): number => {
-        const quarter = Math.floor(uts / QUARTER_HOUR);
-        let epochDay = cache.get(quarter);
-        if (epochDay === undefined) {
-            const start = epochDayAt(quarter * QUARTER_HOUR);
-            epochDay = start === epochDayAt((quarter + 1) * QUARTER_HOUR - 1) ? start : Number.NaN;
-            cache.set(quarter, epochDay);
-        }
-        return Number.isNaN(epochDay) ? epochDayAt(uts) : epochDay;
-    };
-}
-
-function isoDate(epochDay: number): string {
-    return new Date(epochDay * DAY_SECONDS * 1000).toISOString().slice(0, 10);
-}
-
 /**
  * Builds the Standings for every Day from the first Scrobble's Day through `today`,
  * both taken as Days in `timeZone`.
@@ -88,9 +67,11 @@ export function buildStandings(
     if (artistCount >= UNRANKED)
         throw new RangeError(`Too many Artists (${artistCount}) for 16-bit Standings`);
 
-    const firstEpochDay = sorted.length > 0 ? epochDayOf(sorted[0]!.uts) : epochDayOf(today);
-    const dayCount =
-        Math.max(epochDayOf(today), epochDayOf(sorted.at(-1)?.uts ?? today)) - firstEpochDay + 1;
+    const { firstEpochDay, dayCount } = historyDays(
+        epochDayOf,
+        sorted.length > 0 ? { first: sorted[0]!.uts, last: sorted.at(-1)!.uts } : undefined,
+        today,
+    );
     const cumulative = new Uint32Array(dayCount * artistCount);
     const standing = new Uint16Array(dayCount * artistCount).fill(UNRANKED);
     const rankOrder = new Uint16Array(dayCount * artistCount).fill(UNRANKED);
@@ -136,14 +117,6 @@ export function buildStandings(
         rankOrder,
         dailyVolume,
     };
-}
-
-/** Orders names case-insensitively, then case-sensitively. */
-function compareNames(a: string, b: string): number {
-    const lowerA = a.toLowerCase();
-    const lowerB = b.toLowerCase();
-    if (lowerA !== lowerB) return lowerA < lowerB ? -1 : 1;
-    return a < b ? -1 : a > b ? 1 : 0;
 }
 
 /** The ISO date of a Day. */

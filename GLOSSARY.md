@@ -42,6 +42,14 @@ _Avoid_: Mover, riser
 The single Day the timeline is currently inspecting; its Top X, Daily plays and Climbers are what the chart reports on.
 _Avoid_: Selected date, current day
 
+**Window**:
+One of the back-to-back, non-overlapping blocks of x Days the history is cut into, counted from its first Day (Days 0..x−1, x..2x−1, …), where x is a setting; the last Window may be shorter. When the first Day moves, the Windows move with it.
+_Avoid_: Period, bucket
+
+**Soundtrack**:
+The song that sums up a Window: the most-played track (by exact last.fm name, whatever its album) of the Window's most-played Artist, counted over all of the Window's Days, with ties broken as Standings break them. An empty Window has none, and the previous Window's Soundtrack stays shown through it.
+_Avoid_: Theme song, now playing
+
 **Import**:
 Fetching a Listener's whole history from last.fm, newest first; it can pause and resume.
 

@@ -18,7 +18,7 @@ export async function boot(root: HTMLElement): Promise<void> {
     const settings = await createSettings(db, failures);
     const ingest = createIngest({ db, events });
     const timeline = createTimeline({
-        build: createWorkerBuild(),
+        ...createWorkerBuild(),
         events,
         now: Date.now,
         requestFrame: (callback) => {
@@ -26,6 +26,10 @@ export async function boot(root: HTMLElement): Promise<void> {
             return () => cancelAnimationFrame(frame);
         },
         playback: () => settings.store.getState(),
+    });
+    // A new Window size picks the Soundtracks again; the tables stay as they are.
+    settings.store.subscribe((now, before) => {
+        if (now.soundtrackDays !== before.soundtrackDays) void timeline.repickSoundtracks();
     });
     const session = createSession({
         db,

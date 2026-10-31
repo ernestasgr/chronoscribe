@@ -1,13 +1,14 @@
 import { ChevronLeftIcon, ChevronRightIcon, PauseIcon, PlayIcon } from "lucide-react";
-import { useEffect, useState } from "react";
-import type { z } from "zod";
+import { useEffect } from "react";
 import { SECONDS_PER_DAY, SecondsPerDay, STEP_DAYS, StepDays } from "../settings";
 import { usePlaying, useTimeline, type Timeline } from "../timeline";
-import { Button, Input, Label } from "../ui";
+import { Button, Label } from "../ui";
+import { DayPresets, NumberSetting, type DayPreset } from "./fields";
 import { useServices, useSettings } from "./services";
+import { SoundtrackLine, SoundtrackSettings } from "./Soundtrack";
 
 /** The step sizes offered as presets, by label. */
-const STEP_PRESETS: readonly (readonly [label: string, days: number])[] = [
+const STEP_PRESETS: readonly DayPreset[] = [
     ["1d", 1],
     ["1w", 7],
     ["30d", 30],
@@ -41,7 +42,10 @@ export function usePlayerKeys(timeline: Timeline) {
     }, [timeline]);
 }
 
-/** Play and pause, the speed, and the "◀ N Days ▶" step control with its presets. */
+/**
+ * Play and pause, the speed, the "◀ N Days ▶" step control with its presets, and the
+ * Soundtrack's switch and Window size, with the Soundtrack named while playing.
+ */
 export function Player() {
     const { settings } = useServices();
     const { togglePlaying, step } = useTimeline();
@@ -91,17 +95,11 @@ export function Player() {
                 >
                     <ChevronRightIcon />
                 </Button>
-                {STEP_PRESETS.map(([label, days]) => (
-                    <Button
-                        key={label}
-                        variant={stepDays === days ? "secondary" : "ghost"}
-                        size="xs"
-                        aria-pressed={stepDays === days}
-                        onClick={() => settings.update({ stepDays: days })}
-                    >
-                        {label}
-                    </Button>
-                ))}
+                <DayPresets
+                    presets={STEP_PRESETS}
+                    value={stepDays}
+                    onChoose={(days) => settings.update({ stepDays: days })}
+                />
             </div>
             <div className="flex items-center gap-2">
                 <Label htmlFor="speed">Speed</Label>
@@ -117,55 +115,8 @@ export function Player() {
                 />
                 <span className="text-sm text-muted-foreground">s/Day</span>
             </div>
+            <SoundtrackSettings />
+            <SoundtrackLine />
         </div>
-    );
-}
-
-/**
- * A number input for a setting that keeps what is being typed, saving it only once it is valid,
- * so passing through an invalid value such as "0." on the way to "0.05" doesn't reset it.
- */
-function NumberSetting({
-    id,
-    label,
-    value,
-    min,
-    max,
-    step,
-    schema,
-    onChange,
-    className,
-}: {
-    id?: string;
-    label?: string;
-    value: number;
-    min: number;
-    max: number;
-    step: number;
-    /** The rule a typed value must pass before it is saved. */
-    schema: z.ZodType<number>;
-    onChange: (value: number) => void;
-    className?: string;
-}) {
-    const [draft, setDraft] = useState<string>();
-    return (
-        <Input
-            id={id}
-            aria-label={label}
-            type="number"
-            min={min}
-            max={max}
-            step={step}
-            value={draft ?? String(value)}
-            className={className}
-            onChange={(e) => {
-                setDraft(e.target.value);
-                const typed = schema.safeParse(
-                    e.target.value === "" ? Number.NaN : Number(e.target.value),
-                );
-                if (typed.success) onChange(typed.data);
-            }}
-            onBlur={() => setDraft(undefined)}
-        />
     );
 }
