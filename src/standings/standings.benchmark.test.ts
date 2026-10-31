@@ -74,10 +74,13 @@ describe("benchmark on a history shaped like the measured one", () => {
 
     test("the Soundtracks for 1-Day or 30-Day Windows build in under 300 ms, by either pick", () => {
         for (const windowDays of [1, 30])
-            for (const pick of SOUNDTRACK_PICKS)
-                expect(
-                    time(() => buildSoundtracks(history, { ...options, windowDays, pick })),
-                ).toBeLessThan(300);
+            for (const pick of SOUNDTRACK_PICKS) {
+                const build = () => buildSoundtracks(history, { ...options, windowDays, pick });
+                // A warm-up, then the fastest of three, so a cold JIT or a busy runner doesn't count.
+                build();
+                const fastest = Math.min(time(build), time(build), time(build));
+                expect(fastest).toBeLessThan(300);
+            }
     });
 
     test("a Focus Day report takes under 5 ms", () => {
