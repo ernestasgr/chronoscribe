@@ -25,6 +25,7 @@ import { ListenerMenu } from "./ListenerMenu";
 import { Pins } from "./Pins";
 import { Player, usePlayerKeys } from "./Player";
 import { useServices, useSettings } from "./services";
+import { SpotifySettings } from "./SpotifySettings";
 import { SyncControl } from "./SyncControl";
 
 /** The Dashboard: the toolbar, the chart, and the Focus Day sidebar. */
@@ -152,7 +153,7 @@ function Toolbar({
     );
 }
 
-/** The API key, probed before it is saved, and the Listener's timezone. */
+/** The API key, probed before it is saved, the Listener's timezone, and the Spotify connection. */
 function SettingsPanel({ listener }: { listener: ListenerRow }) {
     const { session } = useServices();
     return (
@@ -166,6 +167,7 @@ function SettingsPanel({ listener }: { listener: ListenerRow }) {
                     onChange={(timeZone) => void session.changeTimeZone(timeZone)}
                 />
             </div>
+            <SpotifySettings />
         </Card>
     );
 }

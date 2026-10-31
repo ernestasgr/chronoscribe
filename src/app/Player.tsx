@@ -47,7 +47,7 @@ export function usePlayerKeys(timeline: Timeline) {
  * Soundtrack's switch and Window size, with the Soundtrack named while playing.
  */
 export function Player() {
-    const { settings } = useServices();
+    const { settings, spotify } = useServices();
     const { togglePlaying, step } = useTimeline();
     const playing = usePlaying();
     const stepDays = useSettings((s) => s.stepDays);
@@ -63,7 +63,11 @@ export function Player() {
                 variant="outline"
                 size="icon"
                 aria-label={playing ? "Pause" : "Play"}
-                onClick={togglePlaying}
+                onClick={() => {
+                    // Browsers let Spotify play only once a click has unlocked its audio.
+                    if (!playing) spotify?.unlockAudio();
+                    togglePlaying();
+                }}
             >
                 {playing ? <PauseIcon /> : <PlayIcon />}
             </Button>

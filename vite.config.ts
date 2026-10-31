@@ -8,7 +8,8 @@ export default defineConfig({
     plugins: [react(), tailwindcss()],
     resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
     worker: { format: "es" },
-    server: { port: 5273, strictPort: true },
+    // Spotify accepts only 127.0.0.1, not localhost, as a local redirect address.
+    server: { host: "127.0.0.1", port: 5273, strictPort: true },
     test: {
         include: ["src/**/*.test.ts"],
         environment: "node",

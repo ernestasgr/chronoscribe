@@ -16,6 +16,7 @@ const MODULES = [
     "ui",
     "lastfm",
     "settings",
+    "spotify",
     "db",
     "ingest",
     "standings",

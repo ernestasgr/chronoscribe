@@ -8,6 +8,7 @@ import { createEventBus } from "../events";
 import { createIngest, type IngestEvents, type Job, type Outcome } from "../ingest";
 import { buildSoundtracks, buildStandings } from "../standings";
 import { createTimeline, type ListenerRef } from "../timeline";
+import type { ConnectionEvents } from "./connection";
 import { createFailures } from "./failures";
 import { createSession, transition, viewedListener, type SessionState } from "./session";
 import { createSettings } from "./settings";
@@ -51,7 +52,7 @@ async function setUp(
     const events = createEventBus<IngestEvents>();
     if (apiKey !== undefined) await db.saveSettings({ ...(await db.loadSettings()), apiKey });
     const failures = createFailures();
-    const settings = await createSettings(db, failures);
+    const settings = await createSettings(db, failures, createEventBus<ConnectionEvents>());
     const ingest = createIngest({
         db,
         events,
