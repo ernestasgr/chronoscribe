@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
     ACCOUNTS_ROOT,
     API_ROOT,
+    bearer,
     reaching,
     unavailable,
     unixMs,
@@ -9,6 +10,7 @@ import {
     type SpotifyFailure,
     type SpotifyResult,
     type SpotifyTokens,
+    type UnixMs,
 } from "./core";
 
 /** A token endpoint reply; `refresh_token` is left out when Spotify keeps the old one. */
@@ -30,6 +32,26 @@ const ApiError = z.object({
 const jsonOf = (response: Response): Promise<unknown> =>
     response.json().catch((): unknown => undefined);
 
+/** How long Spotify is waited for after a 429 that doesn't say, in seconds. */
+const DEFAULT_RETRY_AFTER_S = 60;
+
+/**
+ * When a 429 lets the app ask again: after its `Retry-After`, given in seconds or as a date, or
+ * a minute if it gives none.
+ */
+const retryAt = (response: Response, now: () => number): UnixMs => {
+    const header = response.headers.get("retry-after") ?? "";
+    const seconds = Number(header);
+    if (header !== "" && Number.isFinite(seconds) && seconds >= 0)
+        return unixMs(now() + seconds * 1000);
+    const date = Date.parse(header);
+    return unixMs(Number.isNaN(date) ? now() + DEFAULT_RETRY_AFTER_S * 1000 : date);
+};
+
+/** Spotify asking the app to wait, quota or not, until its `Retry-After` has passed. */
+const rateLimited = (response: Response, now: () => number) =>
+    ({ ok: false, error: { kind: "RateLimited", until: retryAt(response, now) } }) as const;
+
 /** Posts a form to the token endpoint and reads the tokens it grants. */
 async function requestTokens(
     form: Record<string, string>,
@@ -43,6 +65,7 @@ async function requestTokens(
             headers: { "content-type": "application/x-www-form-urlencoded" },
             body: new URLSearchParams(form).toString(),
         });
+        if (response.status === 429) return rateLimited(response, now);
         const body = await jsonOf(response);
         const refused = OAuthError.safeParse(body);
         if (refused.success)
@@ -112,11 +135,15 @@ const forbidden = (body: unknown): SpotifyFailure => {
         : { kind: "NotAllowlisted" };
 };
 
-/** Maps a Web API response to success or its failure. */
-export async function apiResult(response: Response): Promise<SpotifyResult<unknown>> {
+/** Maps a Web API response to success or its failure; a 429, quota or not, says when to ask again. */
+export async function apiResult(
+    response: Response,
+    now: () => number,
+): Promise<SpotifyResult<unknown>> {
     const body = await jsonOf(response);
     if (response.ok) return { ok: true, value: body };
     if (response.status === 403) return { ok: false, error: forbidden(body) };
+    if (response.status === 429) return rateLimited(response, now);
     const parsed = ApiError.safeParse(body);
     return unavailable(parsed.success ? parsed.data.error.message : `HTTP ${response.status}`);
 }
@@ -128,12 +155,14 @@ export async function apiResult(response: Response): Promise<SpotifyResult<unkno
 export async function checkAccount(
     accessToken: string,
     fetchFn: Fetch,
+    now: () => number,
 ): Promise<SpotifyResult<void>> {
     return reaching(async () => {
         const result = await apiResult(
             await fetchFn(`${API_ROOT}/me`, {
-                headers: { authorization: `Bearer ${accessToken}` },
+                headers: bearer(accessToken),
             }),
+            now,
         );
         return result.ok ? { ok: true, value: undefined } : result;
     });

@@ -26,13 +26,14 @@ const isConnected = (state: ConnectionState): boolean => state.kind === "connect
 const isUnavailable = (state: ConnectionState): boolean =>
     state.kind === "connected" && state.device.kind === "unavailable";
 
-/** The Spotify connection's status and Disconnect, if the build has Spotify at all. */
+/** The Spotify connection's status, Disconnect and Forget Spotify matches, if the build has Spotify at all. */
 export function SpotifySettings() {
     const { spotify } = useServices();
     return spotify ? <SpotifyConnection connection={spotify} /> : null;
 }
 
 function SpotifyConnection({ connection }: { connection: Connection }) {
+    const { soundtrackPlayer } = useServices();
     const status = useConnection(connection, statusText);
     const connected = useConnection(connection, isConnected);
     const unavailable = useConnection(connection, isUnavailable);
@@ -55,6 +56,17 @@ function SpotifyConnection({ connection }: { connection: Connection }) {
                         onClick={() => void connection.disconnect()}
                     >
                         Disconnect Spotify
+                    </Button>
+                </div>
+            )}
+            {soundtrackPlayer && (
+                <div>
+                    <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void soundtrackPlayer.forgetMatches()}
+                    >
+                        Forget Spotify matches
                     </Button>
                 </div>
             )}

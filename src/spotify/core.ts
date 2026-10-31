@@ -27,7 +27,8 @@ export const spotifyClientId = (env: unknown): string | undefined => {
 
 /**
  * Why Spotify can't be used: the sign-in was refused or lapsed, the account isn't allowlisted
- * or lacks Premium, the browser can't play (no DRM) or blocked autoplay, or Spotify didn't answer.
+ * or lacks Premium, the browser can't play (no DRM) or blocked autoplay, Spotify asked the app to
+ * wait until `until`, or Spotify didn't answer.
  */
 export type SpotifyFailure =
     | { kind: "SignInRefused"; message: string }
@@ -36,6 +37,7 @@ export type SpotifyFailure =
     | { kind: "PremiumRequired" }
     | { kind: "Unsupported"; message: string }
     | { kind: "AutoplayBlocked" }
+    | { kind: "RateLimited"; until: UnixMs }
     | { kind: "Unavailable"; message: string };
 
 export type SpotifyResult<T> = { ok: true; value: T } | { ok: false; error: SpotifyFailure };
@@ -81,4 +83,16 @@ export const parseStoredSpotify = (row: unknown): StoredSpotify | undefined => {
     return parsed.success ? parsed.data : undefined;
 };
 
+/** The stored wait a 429 asked for: when the app may ask Spotify again. */
+const StoredLimitSchema = z.object({ until: z.number().transform(unixMs) });
+
+/** A stored wait read back; a missing or malformed row reads as none. */
+export const parseStoredLimit = (row: unknown): UnixMs | undefined => {
+    const parsed = StoredLimitSchema.safeParse(row);
+    return parsed.success ? parsed.data.until : undefined;
+};
+
 export type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
+
+/** The header that carries an access token to the Web API. */
+export const bearer = (accessToken: string) => ({ authorization: `Bearer ${accessToken}` });

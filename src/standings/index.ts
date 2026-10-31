@@ -4,6 +4,7 @@ import { compareNames, DAY_SECONDS, dayIndexer, historyDays, isoDate } from "./d
 export {
     buildSoundtracks,
     soundtrackAt,
+    windowAt,
     windowIndex,
     type Soundtrack,
     type Soundtracks,

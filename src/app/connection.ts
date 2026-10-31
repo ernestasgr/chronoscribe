@@ -19,6 +19,7 @@ import {
     type SpotifyResult,
     type SpotifyTokens,
     type StoredSpotify,
+    type UnixMs,
     type WebPlayer,
 } from "../spotify";
 import type { Failures } from "./failures";
@@ -84,6 +85,9 @@ export function transition(state: ConnectionState, event: ConnectionEvent): Conn
 export const readyDevice = (state: ConnectionState): DeviceId | undefined =>
     state.kind === "connected" && state.device.kind === "ready" ? state.device.deviceId : undefined;
 
+/** A moment as the user's clock shows it. */
+export const timeOf = (at: UnixMs): string => new Date(at).toLocaleTimeString();
+
 /** What the user is told when Spotify can't be used, and what to do about it. */
 export function describeFailure(failure: SpotifyFailure): string {
     switch (failure.kind) {
@@ -99,6 +103,8 @@ export function describeFailure(failure: SpotifyFailure): string {
             return `This browser can't play Spotify, which needs DRM support (${failure.message}).`;
         case "AutoplayBlocked":
             return "The browser blocked Spotify from playing. Press Play to try again.";
+        case "RateLimited":
+            return `Spotify asked Chronoscribe to slow down. The Soundtrack can go back on at ${timeOf(failure.until)}.`;
         case "Unavailable":
             return `Couldn't reach Spotify (${failure.message}).`;
     }
@@ -280,7 +286,7 @@ export function createConnection({
             now,
         );
         if (!exchanged.ok) return abandon(exchanged.error);
-        const account = await checkAccount(exchanged.value.accessToken, port.fetch);
+        const account = await checkAccount(exchanged.value.accessToken, port.fetch, now);
         if (!account.ok) return abandon(account.error);
         await db.saveSpotify({ kind: "connected", tokens: exchanged.value });
         held.tokens = exchanged.value;
@@ -325,6 +331,14 @@ export function createConnection({
         unlockAudio,
 
         retryDevice,
+
+        fail,
+
+        /** Pauses this tab's player, keeping its place. */
+        pause: (): Promise<void> => held.player?.pause() ?? Promise.resolve(),
+
+        /** Carries on playing this tab's player from where it paused. */
+        resume: (): Promise<void> => held.player?.resume() ?? Promise.resolve(),
 
         finishSignIn: guarded("Couldn't finish signing in to Spotify", finishSignIn),
 

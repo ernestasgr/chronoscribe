@@ -11,14 +11,19 @@ import { createFailures, type Failures } from "./failures";
 import { ServicesContext } from "./services";
 import { createSession } from "./session";
 import { createSettings } from "./settings";
+import { createSoundtrackPlayer, type SetTimer } from "./soundtrackPlayer";
 
-/** The Spotify connection, if the build has a Client ID; it finishes a sign-in Spotify sent back. */
+/**
+ * The Spotify connection and the port it reaches Spotify through, if the build has a Client ID;
+ * the connection finishes a sign-in Spotify sent back.
+ */
 async function connectSpotify(db: Db, events: Emitter<ConnectionEvents>, failures: Failures) {
     const clientId = spotifyClientId(import.meta.env);
     if (clientId === undefined) return undefined;
+    const port = browserSpotify();
     const connection = createConnection({
         db,
-        port: browserSpotify(),
+        port,
         events,
         failures,
         clientId,
@@ -27,8 +32,13 @@ async function connectSpotify(db: Db, events: Emitter<ConnectionEvents>, failure
         stored: await db.loadSpotify(),
     });
     void connection.finishSignIn(location.href);
-    return connection;
+    return { connection, port };
 }
+
+const setTimer: SetTimer = (run, ms) => {
+    const timer = setTimeout(run, ms);
+    return () => clearTimeout(timer);
+};
 
 /** The composition root: opens storage, builds every service once and renders the app. */
 export async function boot(root: HTMLElement): Promise<void> {
@@ -63,11 +73,33 @@ export async function boot(root: HTMLElement): Promise<void> {
         defaultTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         now: Date.now,
     });
+    const soundtrackPlayer =
+        spotify &&
+        createSoundtrackPlayer({
+            timeline,
+            settings,
+            connection: spotify.connection,
+            events,
+            db,
+            fetch: spotify.port.fetch,
+            now: Date.now,
+            setTimer,
+            failures,
+            limitedUntil: await db.loadSpotifyLimit(),
+        });
 
     createRoot(root).render(
         <StrictMode>
             <ServicesContext
-                value={{ ingest, settings, session, failures, spotify, now: Date.now }}
+                value={{
+                    ingest,
+                    settings,
+                    session,
+                    failures,
+                    spotify: spotify?.connection,
+                    soundtrackPlayer,
+                    now: Date.now,
+                }}
             >
                 <TimelineContext value={timeline}>
                     <App />

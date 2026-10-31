@@ -2,7 +2,9 @@ import { SOUNDTRACK_DAYS, SoundtrackDays } from "../settings";
 import { usePick, usePlaying, useSoundtrack, useTimeline } from "../timeline";
 import { Button, Label, Switch } from "../ui";
 import { DayPresets, NumberSetting, type DayPreset } from "./fields";
-import { useServices, useSettings } from "./services";
+import { timeOf } from "./connection";
+import { useServices, useSettings, useSoundtrackPlayer } from "./services";
+import { FREE, type Limit, type SoundtrackPlayer } from "./soundtrackPlayer";
 
 /** The Window sizes offered as presets, by label. */
 const WINDOW_PRESETS: readonly DayPreset[] = [
@@ -12,17 +14,17 @@ const WINDOW_PRESETS: readonly DayPreset[] = [
     ["1y", 365],
 ];
 
-/** The Soundtrack switch and the Window size, with its presets, each saved as soon as it changes. */
-export function SoundtrackSettings() {
+/** The Soundtrack switch, held off while Spotify has asked the app to wait, saying until when. */
+function SoundtrackSwitch({ limit }: { limit: Limit }) {
     const { settings, spotify } = useServices();
     const on = useSettings((s) => s.soundtrack);
-    const windowDays = useSettings((s) => s.soundtrackDays);
-
     return (
-        <div className="flex flex-wrap items-center gap-2">
+        <>
             <Switch
                 id="soundtrack"
                 checked={on}
+                disabled={limit.kind === "limited"}
+                aria-describedby={limit.kind === "limited" ? "soundtrack-limit" : undefined}
                 onCheckedChange={(soundtrack) => {
                     settings.update({ soundtrack });
                     // Signs in first if need be, else unlocks audio on this click.
@@ -30,6 +32,32 @@ export function SoundtrackSettings() {
                 }}
             />
             <Label htmlFor="soundtrack">Soundtrack</Label>
+            {limit.kind === "limited" && (
+                <span id="soundtrack-limit" className="text-sm text-muted-foreground">
+                    Spotify asked to wait: back on at {timeOf(limit.until)}
+                </span>
+            )}
+        </>
+    );
+}
+
+/** The switch, following the Soundtrack player's limit. */
+function PlayerSwitch({ player }: { player: SoundtrackPlayer }) {
+    return <SoundtrackSwitch limit={useSoundtrackPlayer(player, (s) => s.limit)} />;
+}
+
+/** The Soundtrack switch and the Window size, with its presets, each saved as soon as it changes. */
+export function SoundtrackSettings() {
+    const { settings, soundtrackPlayer } = useServices();
+    const windowDays = useSettings((s) => s.soundtrackDays);
+
+    return (
+        <div className="flex flex-wrap items-center gap-2">
+            {soundtrackPlayer ? (
+                <PlayerSwitch player={soundtrackPlayer} />
+            ) : (
+                <SoundtrackSwitch limit={FREE} />
+            )}
             <div className="flex items-center gap-1">
                 <NumberSetting
                     label="Window size"

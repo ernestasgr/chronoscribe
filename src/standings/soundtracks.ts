@@ -124,8 +124,10 @@ export function buildSoundtracks(
     return { windowDays, shown: carriedForward(own) };
 }
 
+/** The Window holding `day`; a Day past the history counts as in the last Window. */
+export const windowAt = (soundtracks: Soundtracks, day: DayIndex): WindowIndex =>
+    windowIndex(Math.min(Math.floor(day / soundtracks.windowDays), soundtracks.shown.length - 1));
+
 /** The Soundtrack shown on `day`: its Window's, or the last one before an empty Window. */
 export const soundtrackAt = (soundtracks: Soundtracks, day: DayIndex): Soundtrack | undefined =>
-    soundtracks.shown[
-        Math.min(Math.floor(day / soundtracks.windowDays), soundtracks.shown.length - 1)
-    ];
+    soundtracks.shown[windowAt(soundtracks, day)];

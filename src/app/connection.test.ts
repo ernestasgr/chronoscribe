@@ -3,8 +3,8 @@ import "fake-indexeddb/auto";
 import { beforeEach, describe, expect, test } from "vitest";
 import {
     ACCOUNTS_ORIGIN,
-    API_ORIGIN,
     createFakeSpotify,
+    fakeSpotifyFetch,
     FIXTURE_DEVICE_ID,
     type FakeSpotifyOptions,
 } from "../../test-support/spotify";
@@ -19,21 +19,6 @@ const CLIENT_ID = "fixture-client";
 const ROOT = "http://127.0.0.1:5273/";
 const NOW = Date.parse("2026-07-10T12:00:00Z");
 const HOUR = 3_600_000;
-
-/** Spotify's accounts service and Web API, answered by the fake. */
-const fakeFetch =
-    (spotify: ReturnType<typeof createFakeSpotify>) =>
-    async (input: string, init?: RequestInit): Promise<Response> => {
-        const url = new URL(input);
-        const reply =
-            url.origin === ACCOUNTS_ORIGIN && url.pathname === "/api/token"
-                ? await spotify.token(new URLSearchParams(String(init?.body)))
-                : url.origin === API_ORIGIN
-                  ? spotify.api(url, new Headers(init?.headers).get("authorization"))
-                  : undefined;
-        if (!reply) throw new TypeError("unexpected host");
-        return new Response(JSON.stringify(reply.body), { status: reply.status });
-    };
 
 /** Waits until the SDK's queued events have been handled. */
 const settle = () => new Promise((resolve) => setTimeout(resolve));
@@ -62,7 +47,7 @@ async function setUp(
         now: () => clock.now,
         stored: await db.loadSpotify(),
         port: {
-            fetch: fakeFetch(spotify),
+            fetch: fakeSpotifyFetch(spotify),
             navigate: (url) => visits.push(url),
             replaceAddress: (url) => {
                 address.href = url;

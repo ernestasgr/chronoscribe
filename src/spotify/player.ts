@@ -24,6 +24,8 @@ export interface WebPlayer {
     disconnect(): void;
     /** Unlocks audio for the tab; called on a click, so browsers allow it to play. */
     activateElement(): Promise<void>;
+    pause(): Promise<void>;
+    resume(): Promise<void>;
     addListener(event: PlayerEvent, handler: (payload: unknown) => void): boolean;
 }
 
