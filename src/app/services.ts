@@ -6,6 +6,7 @@ import type { Connection, ConnectionState } from "./connection";
 import type { Failures, FailuresState } from "./failures";
 import type { Session, SessionState } from "./session";
 import type { Settings } from "./settings";
+import type { SoundtrackPlayer, SoundtrackPlayerState } from "./soundtrackPlayer";
 
 /** Everything the composition root builds, handed to components through context. */
 export interface Services {
@@ -15,6 +16,8 @@ export interface Services {
     failures: Failures;
     /** The Spotify connection, or none if the build has no Spotify Client ID. */
     spotify: Connection | undefined;
+    /** What plays the Soundtrack on Spotify, or none if the build has no Spotify Client ID. */
+    soundtrackPlayer: SoundtrackPlayer | undefined;
     /** The clock that labels counting from now, such as the sync age, read. */
     now: () => number;
 }
@@ -43,3 +46,8 @@ export const useConnection = <T>(
     connection: Connection,
     select: (state: ConnectionState) => T,
 ): T => useStore(connection.store, select);
+
+export const useSoundtrackPlayer = <T>(
+    player: SoundtrackPlayer,
+    select: (state: SoundtrackPlayerState) => T,
+): T => useStore(player.store, select);

@@ -11,6 +11,8 @@ import {
 const CORS = {
     "access-control-allow-origin": "*",
     "access-control-allow-headers": "authorization, content-type",
+    "access-control-allow-methods": "GET, POST, PUT",
+    "access-control-expose-headers": "retry-after",
 };
 
 /** Answers a CORS preflight, which the browser sends before a request with `Authorization`. */
@@ -49,11 +51,17 @@ export async function serveSpotify(
     await page.route(`${API_ORIGIN}/**`, async (route) => {
         if (await preflighted(route)) return;
         const request = route.request();
-        const { status, body } = spotify.api(
-            new URL(request.url()),
-            (await request.headerValue("authorization")) ?? null,
-        );
-        return route.fulfill({ status, json: body, headers: CORS });
+        const { status, body, headers } = spotify.api({
+            url: new URL(request.url()),
+            method: request.method(),
+            authorization: (await request.headerValue("authorization")) ?? null,
+            body: request.postData(),
+        });
+        return route.fulfill({
+            status,
+            ...(body === undefined ? {} : { json: body }),
+            headers: { ...CORS, ...headers },
+        });
     });
     await page.route(SDK_URL, (route) =>
         route.fulfill({ contentType: "text/javascript", body: spotify.sdkScript }),
@@ -66,7 +74,14 @@ export const fakePlayer = (page: Page) =>
     page.evaluate(() => {
         // cast: the fake SDK script puts its player on `window`, which the page's types don't know.
         const player = (window as unknown as Record<string, unknown>).fakeSpotifyPlayer as
-            | { connected: boolean; activations: number }
+            | { connected: boolean; activations: number; pauses?: number; resumes?: number }
             | undefined;
-        return player && { connected: player.connected, activations: player.activations };
+        return (
+            player && {
+                connected: player.connected,
+                activations: player.activations,
+                pauses: player.pauses ?? 0,
+                resumes: player.resumes ?? 0,
+            }
+        );
     });

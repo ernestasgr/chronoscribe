@@ -1,8 +1,16 @@
-import { Dexie, type EntityTable } from "dexie";
+import { Dexie, type EntityTable, type Table } from "dexie";
 import { z } from "zod";
 import { unixSeconds, type UnixSeconds } from "../lastfm";
 import { parseSettings, type AppSettings } from "../settings";
-import { parseStoredSpotify, type StoredSpotify } from "../spotify";
+import {
+    parseSpotifyMatch,
+    parseStoredLimit,
+    parseStoredSpotify,
+    type SpotifyMatch,
+    type StoredSpotify,
+    type TrackName,
+    type UnixMs,
+} from "../spotify";
 
 /** A Listener's key: their last.fm username, lowercased. */
 export type ListenerId = string & { readonly brand: "ListenerId" };
@@ -64,6 +72,10 @@ type ChronoscribeDexie = Dexie & {
     listeners: EntityTable<ListenerRow, "id">;
     scrobbles: EntityTable<ScrobbleRow, "id">;
     spotify: EntityTable<StoredSpotify & { id: string }, "id">;
+    /** Each last.fm track's Spotify search result, shared by every Listener; keyed on `[artist+track]`. */
+    spotifyMatches: Table<TrackName & { match: SpotifyMatch }, [string, string]>;
+    /** When a 429 lets the app ask Spotify again, kept so a reload still waits. */
+    spotifyLimit: EntityTable<{ id: string; until: number }, "id">;
 };
 
 function openDexie(name: string): ChronoscribeDexie {
@@ -75,6 +87,7 @@ function openDexie(name: string): ChronoscribeDexie {
         scrobbles: "++id, [listenerId+uts]",
     });
     dexie.version(2).stores({ spotify: "id" });
+    dexie.version(3).stores({ spotifyMatches: "[artist+track]", spotifyLimit: "id" });
     return dexie;
 }
 
@@ -108,6 +121,30 @@ export function openDb(name = "chronoscribe") {
 
         async clearSpotify(): Promise<void> {
             await dexie.spotify.delete(SPOTIFY_ID);
+        },
+
+        /** A track's stored Spotify search result, checked as it is read; none if never searched or malformed. */
+        async spotifyMatch({ artist, track }: TrackName): Promise<SpotifyMatch | undefined> {
+            return parseSpotifyMatch((await dexie.spotifyMatches.get([artist, track]))?.match);
+        },
+
+        /** Stores a track's Spotify search result, found or not, for every Listener. */
+        async saveSpotifyMatch({ artist, track }: TrackName, match: SpotifyMatch): Promise<void> {
+            await dexie.spotifyMatches.put({ artist, track, match });
+        },
+
+        /** Forgets every Spotify search result, so tracks are searched for again. */
+        async clearSpotifyMatches(): Promise<void> {
+            await dexie.spotifyMatches.clear();
+        },
+
+        /** When the last 429 lets the app ask Spotify again, checked as it is read; none if never limited. */
+        async loadSpotifyLimit(): Promise<UnixMs | undefined> {
+            return parseStoredLimit(await dexie.spotifyLimit.get(SPOTIFY_ID));
+        },
+
+        async saveSpotifyLimit(until: UnixMs): Promise<void> {
+            await dexie.spotifyLimit.put({ id: SPOTIFY_ID, until });
         },
 
         async listener(id: ListenerId): Promise<ListenerRow | undefined> {

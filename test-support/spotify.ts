@@ -1,10 +1,11 @@
 /**
  * A fake Spotify, shared by the Vitest and Playwright tests: its accounts service (the PKCE
- * sign-in page and token endpoint), the Web API's `GET /me`, and the Web Playback SDK. It checks
- * what the real one checks: the client, the redirect address, the PKCE verifier, and refresh
- * tokens that are used up once rotated.
+ * sign-in page and token endpoint), the Web API's `GET /me`, track search and play, and the Web
+ * Playback SDK. It checks what the real one checks: the client, the redirect address, the PKCE
+ * verifier, refresh tokens that are used up once rotated, and the device a track is played on.
  */
 
+import { z } from "zod";
 import type { FixtureResponse } from "./lastfm";
 
 export const ACCOUNTS_ORIGIN = "https://accounts.spotify.com";
@@ -27,6 +28,38 @@ export interface FakeSpotifyOptions {
     premium?: boolean;
     /** Whether the browser supports DRM; the SDK raises `initialization_error` if not. */
     drm?: boolean;
+    /** The tracks search finds. */
+    catalogue?: readonly CatalogueTrack[];
+}
+
+/** A track on the fake Spotify. */
+export interface CatalogueTrack {
+    name: string;
+    artists: readonly string[];
+    uri: string;
+    durationMs: number;
+}
+
+/** A Web API request as the fake reads it. */
+export interface ApiRequest {
+    url: URL;
+    method: string;
+    authorization: string | null;
+    body: string | null;
+}
+
+/** A Web API reply; a 204 has no body. */
+export interface ApiResponse {
+    status: number;
+    body?: unknown;
+    headers?: Record<string, string>;
+}
+
+/** A play request the fake was sent. */
+export interface PlayCall {
+    deviceId: string;
+    uris: readonly string[];
+    positionMs: number;
 }
 
 const SCOPES = [
@@ -53,9 +86,47 @@ const oauthError = (error: string, description: string, status = 400): FixtureRe
     body: { error, error_description: description },
 });
 
-const apiError = (status: number, message: string): FixtureResponse => ({
+const apiError = (status: number, message: string): ApiResponse => ({
     status,
     body: { error: { status, message } },
+});
+
+/** Text as loosely as Spotify's search compares it. */
+const folded = (text: string) =>
+    text
+        .normalize("NFD")
+        .replace(/\p{Diacritic}/gu, "")
+        .toLowerCase();
+
+/**
+ * Whether `track` answers the search `q`: a `track:"…" artist:"…"` search needs each field to
+ * hold its term; a plain search needs every word somewhere in the artists and title.
+ */
+function answers(track: CatalogueTrack, q: string): boolean {
+    const title = folded(track.name);
+    const artists = track.artists.map(folded);
+    const fields = /^track:"(.*)" artist:"(.*)"$/.exec(q);
+    if (fields)
+        return (
+            title.includes(folded(fields[1] ?? "")) &&
+            artists.some((artist) => artist.includes(folded(fields[2] ?? "")))
+        );
+    const haystack = [...artists, title].join(" ");
+    return folded(q)
+        .split(/\s+/)
+        .every((word) => haystack.includes(word));
+}
+
+const searchItem = (track: CatalogueTrack) => ({
+    uri: track.uri,
+    name: track.name,
+    duration_ms: track.durationMs,
+    artists: track.artists.map((name) => ({ name })),
+});
+
+const PlayBody = z.object({
+    uris: z.array(z.string()).default([]),
+    position_ms: z.number().default(0),
 });
 
 type Handler = (payload: unknown) => void;
@@ -68,8 +139,12 @@ export function createFakeSpotify({
     rotatesRefreshTokens = true,
     premium = true,
     drm = true,
+    catalogue = [],
 }: FakeSpotifyOptions) {
     const codes = new Map<string, { challenge: string; redirectUri: string }>();
+    const searches: string[] = [];
+    const plays: PlayCall[] = [];
+    const limits: { retryAfter: number | undefined } = { retryAfter: undefined };
     const refreshTokens = new Set<string>();
     const accessTokens = new Set<string>();
     const counts = { issued: 0, refreshes: 0 };
@@ -159,17 +234,51 @@ export function createFakeSpotify({
             }
         },
 
-        /** The Web API's reply to a request with the given `Authorization` header. */
-        api(url: URL, authorization: string | null): FixtureResponse {
+        /** The Web API's reply to a request. */
+        api({ url, method, authorization, body }: ApiRequest): ApiResponse {
             const token = authorization?.replace(/^Bearer /, "") ?? "";
             if (!accessTokens.has(token)) return apiError(401, "Invalid access token");
-            if (url.pathname !== "/v1/me") return apiError(404, "Service not found");
+            if (limits.retryAfter !== undefined)
+                return {
+                    ...apiError(429, "API rate limit exceeded"),
+                    headers: { "retry-after": String(limits.retryAfter) },
+                };
             if (!allowlisted)
                 return apiError(
                     403,
                     "Check settings on developer.spotify.com/dashboard, the user may not be registered.",
                 );
-            return { status: 200, body: { id: "fixture-user", display_name: "Fixture" } };
+            const route = `${method} ${url.pathname}`;
+            if (route === "GET /v1/me")
+                return { status: 200, body: { id: "fixture-user", display_name: "Fixture" } };
+            if (route === "GET /v1/search") {
+                const q = url.searchParams.get("q") ?? "";
+                const limit = Number(url.searchParams.get("limit") ?? 20);
+                if (url.searchParams.get("type") !== "track" || limit > 10)
+                    return apiError(400, "Invalid search");
+                searches.push(q);
+                const items = catalogue.filter((track) => answers(track, q)).slice(0, limit);
+                return { status: 200, body: { tracks: { items: items.map(searchItem) } } };
+            }
+            if (route === "PUT /v1/me/player/play") {
+                const deviceId = url.searchParams.get("device_id");
+                if (deviceId !== FIXTURE_DEVICE_ID) return apiError(404, "Device not found");
+                const play = PlayBody.parse(JSON.parse(body ?? "{}"));
+                plays.push({ deviceId, uris: play.uris, positionMs: play.position_ms });
+                return { status: 204 };
+            }
+            return apiError(404, "Service not found");
+        },
+
+        /** Every search query the fake was sent, in order. */
+        searches,
+
+        /** Every play request the fake was sent, in order. */
+        plays,
+
+        /** Answers every Web API request with a 429 asking to wait `seconds`, until called with none. */
+        rateLimit(seconds: number | undefined): void {
+            limits.retryAfter = seconds;
         },
 
         /** Whether `token` is an access token this fake issued. */
@@ -257,6 +366,16 @@ function createFakePlayers({
                 player.activations++;
                 return Promise.resolve();
             },
+            pauses: 0,
+            resumes: 0,
+            pause(): Promise<void> {
+                player.pauses++;
+                return Promise.resolve();
+            },
+            resume(): Promise<void> {
+                player.resumes++;
+                return Promise.resolve();
+            },
             /** Asks for a token the way the SDK does whenever it needs a fresh one. */
             token(): Promise<string> {
                 return new Promise((resolve) => options.getOAuthToken(resolve));
@@ -323,9 +442,41 @@ function fakeSdkScript({ premium, drm }: { premium: boolean; drm: boolean }): st
             this.activations += 1;
             return Promise.resolve();
         }
+        pause() {
+            this.pauses = (this.pauses ?? 0) + 1;
+            return Promise.resolve();
+        }
+        resume() {
+            this.resumes = (this.resumes ?? 0) + 1;
+            return Promise.resolve();
+        }
     }
     window.Spotify = { Player };
     window.onSpotifyWebPlaybackSDKReady?.();
 })();
 `;
 }
+
+/** The fake Spotify's accounts service and Web API, as `fetch` reaches them, for the Vitest tests. */
+export const fakeSpotifyFetch =
+    (spotify: FakeSpotify) =>
+    async (input: string, init?: RequestInit): Promise<Response> => {
+        const url = new URL(input);
+        const reply =
+            url.origin === ACCOUNTS_ORIGIN && url.pathname === "/api/token"
+                ? await spotify.token(new URLSearchParams(String(init?.body)))
+                : url.origin === API_ORIGIN
+                  ? spotify.api({
+                        url,
+                        method: init?.method ?? "GET",
+                        authorization: new Headers(init?.headers).get("authorization"),
+                        body: typeof init?.body === "string" ? init.body : null,
+                    })
+                  : undefined;
+        if (!reply) throw new TypeError("unexpected host");
+        const headers = "headers" in reply ? reply.headers : undefined;
+        return new Response(reply.body === undefined ? null : JSON.stringify(reply.body), {
+            status: reply.status,
+            headers,
+        });
+    };

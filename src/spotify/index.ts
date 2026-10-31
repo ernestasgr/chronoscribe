@@ -5,6 +5,7 @@ export * from "./core";
 export * from "./signIn";
 export * from "./accounts";
 export * from "./player";
+export * from "./playback";
 
 /** Everything the app does through Spotify and the browser around it, so tests can fake it. */
 export interface SpotifyPort {
