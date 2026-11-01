@@ -1,5 +1,5 @@
 import { unixSeconds, type UnixSeconds } from "../lastfm";
-import { dayDate, type ArtistId, type DayIndex, type StandingsTables } from ".";
+import { dayDate, type ArtistId, type DayIndex, type StandingsTables } from "./tables";
 import { compareNames, DAY_SECONDS, dayIndexer } from "./days";
 import { byPlays, tally } from "./tally";
 

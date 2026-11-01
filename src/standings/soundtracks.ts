@@ -1,5 +1,5 @@
 import type { SoundtrackPick } from "../settings";
-import type { DayIndex } from ".";
+import type { DayIndex } from "./tables";
 import { compareNames, dayIndexer, historyDays } from "./days";
 import { byPlays, tally, type Tally } from "./tally";
 
