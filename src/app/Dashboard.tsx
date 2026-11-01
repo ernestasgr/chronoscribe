@@ -49,13 +49,25 @@ export function Dashboard({ listener }: { listener: ListenerRow }) {
     const x = useSettings((settings) => settings.x);
     const climbersMode = useSettings((settings) => settings.climbers);
     const options = useSettings(
-        useShallow(({ yAxis, belowTopX, lineShape, linesDrawn, hideFuture }): ChartOptions => ({
-            yAxis,
-            belowTopX,
-            lineShape,
-            linesDrawn,
-            hideFuture,
-        })),
+        useShallow(
+            ({
+                yAxis,
+                belowTopX,
+                lineShape,
+                linesDrawn,
+                hideFuture,
+                spotlightMode,
+                neighbours,
+            }): ChartOptions => ({
+                yAxis,
+                belowTopX,
+                lineShape,
+                linesDrawn,
+                hideFuture,
+                spotlightMode,
+                neighbours,
+            }),
+        ),
     );
     const day = useFocusDay();
     usePlayerKeys(useTimeline());
@@ -91,7 +103,7 @@ export function Dashboard({ listener }: { listener: ListenerRow }) {
                 spotlit={spotlit}
             />
             <Card className="min-h-80 gap-2 overflow-hidden p-2">
-                {spotlit && <SpotlightHeader artist={spotlit} />}
+                {spotlit && <SpotlightHeader artist={spotlit} mode={options.spotlightMode} />}
                 <Chart
                     tables={tables}
                     x={x}

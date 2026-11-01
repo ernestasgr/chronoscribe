@@ -4,7 +4,8 @@ import type { ListenerId } from "../db";
 import {
     dailyPlays,
     dayDate,
-    valueAt,
+    scrobblesAt,
+    standingAt,
     type ArtistId,
     type DayIndex,
     type StandingsTables,
@@ -36,7 +37,7 @@ export function LineCard({ listenerId, tables, artist, day }: LineCardProps) {
     const { session } = useServices();
     const name = tables.artists[artist];
     const plays = dailyPlays(tables, day, artist);
-    const standing = valueAt(tables, artist, day, "standing");
+    const standing = standingAt(tables, artist, day);
 
     return (
         <>
@@ -65,9 +66,7 @@ export function LineCard({ listenerId, tables, artist, day }: LineCardProps) {
                     <Stat label="Standing" value={standing === undefined ? "–" : `#${standing}`} />
                     <Stat
                         label="Scrobbles"
-                        value={(valueAt(tables, artist, day, "scrobbles") ?? 0).toLocaleString(
-                            "en",
-                        )}
+                        value={scrobblesAt(tables, artist, day).toLocaleString("en")}
                     />
                 </dl>
             </header>

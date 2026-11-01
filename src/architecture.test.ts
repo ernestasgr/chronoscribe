@@ -76,7 +76,7 @@ function violations(root: string): string[] {
 /** An import or export specifier renamed with `as`, alone on its line or in a one-line list. */
 const RENAME = /^\s*(?:import\b|export\s*\{|[\w$]+ as [\w$]+,?$)/;
 /** A type assertion, other than `as const`: an expression followed by `as` and a type. */
-const ASSERTION = /[\w$)\]]\s+as\s+(?:[A-Z[(]|unknown\b|never\b|any\b)/;
+const ASSERTION = /[\w$)\]}]\s+as\s+(?:[A-Z[(]|unknown\b|never\b|any\b)/;
 /** A line that is only a comment, where `as` is prose. */
 const COMMENT = /^\s*(?:\/\/|\/\*|\*)/;
 /** A brand constructor: a one-line arrow whose result is asserted to its own return type. */

@@ -7,10 +7,11 @@ import {
     dayDate,
     dayScrobbles,
     topX,
-    valueAt,
+    standingAt,
     type Climber,
     type DayIndex,
     type NamedArtist,
+    type Standing,
     type StandingsTables,
 } from "../standings";
 import {
@@ -39,7 +40,7 @@ function ArtistRowButton({
     children,
 }: {
     artist: string;
-    standing: number | undefined;
+    standing: Standing | undefined;
     children: ReactNode;
 }) {
     const { session } = useServices();
@@ -174,7 +175,7 @@ function SpotlitOutsideTopX({
     day: DayIndex;
     spotlit: NamedArtist;
 }) {
-    const standing = valueAt(tables, spotlit.id, day, "standing");
+    const standing = standingAt(tables, spotlit.id, day);
     return (
         <div
             role="group"

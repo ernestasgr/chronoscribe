@@ -19,6 +19,8 @@ import {
 } from "../standings";
 import { useFocusDay, useTimeline, type Timeline, type View } from "../timeline";
 import {
+    BandAxis,
+    bandY,
     levelScale,
     ScrobblesAxis,
     scrobblesScale,
@@ -39,6 +41,7 @@ import {
     yOnLine,
     type LinesGeometry,
     type LinesScale,
+    type LinesStyle,
 } from "./lines";
 import {
     createLineHover,
@@ -47,7 +50,7 @@ import {
     type LineDetails,
     type LineHover,
 } from "./LineHover";
-import { SPOTLIGHT_FLOOR, spotlightBottom } from "./spotlight";
+import { SPOTLIGHT_FLOOR, spotlightBand, spotlightBottom, spotlitLines } from "./spotlight";
 
 export { Minimap } from "./minimap";
 export type { LineDay, LineDetails } from "./LineHover";
@@ -55,7 +58,13 @@ export type { LineDay, LineDetails } from "./LineHover";
 /** The chart settings, all app-wide. */
 export type ChartOptions = Pick<
     AppSettings,
-    "yAxis" | "belowTopX" | "lineShape" | "linesDrawn" | "hideFuture"
+    | "yAxis"
+    | "belowTopX"
+    | "lineShape"
+    | "linesDrawn"
+    | "hideFuture"
+    | "spotlightMode"
+    | "neighbours"
 >;
 
 /**
@@ -83,9 +92,10 @@ const ARTIST_LABEL_ROOM = 160;
 const ARTIST_LABEL_OFFSET = 10;
 /** The padding either side of an Artist's name inside its box. */
 const ARTIST_LABEL_PAD = 5;
-/** A Timeline line's width, and the Spotlit Artist's thicker one. */
+/** A line's width, before the Spotlit Artist's is drawn thicker. */
 const LINE_WIDTH = 1.8;
-const SPOTLIGHT_LINE_WIDTH = 3;
+/** How far past the plot's top and bottom a line may run, so one at #1 isn't cut in half. */
+const OVERHANG_PX = 4;
 const NOT_DASHED: DashedSpans = new Map();
 
 /** Where each Pinned Artist's line is dashed: across each Day from `from` to `to` they're outside the Top X. */
@@ -106,18 +116,23 @@ const dashedSpans = (
         ]),
     );
 
-/** The ends of the axes that ease: the Scrobbles axis's top and the Spotlight's bottom. */
+/**
+ * The ends of the axes that ease: the Scrobbles axis's top, the static Spotlight's bottom and the
+ * best Standing of the dynamic Spotlight's band.
+ */
 interface EasedEnds {
     scrobblesTop: EasedEnd;
     standingBottom: EasedEnd;
+    bandBest: EasedEnd;
 }
 
-/** What one frame draws: which lines, on what scale, dashed where and how thick. */
+/** What one frame draws: which lines, on what scale, styled how, and how far past the plot. */
 interface FrameLines {
     artists: readonly ArtistId[];
     scale: LinesScale;
-    dashed: DashedSpans;
-    width: number;
+    style: Omit<LinesStyle, "emphasised">;
+    /** How far past the plot's top and bottom the lines are drawn; none, clipped to a band. */
+    overhang: number;
 }
 
 /** The overlay parts the per-frame painter moves, which React renders but never positions. */
@@ -129,8 +144,9 @@ interface PaintedParts {
 
 /**
  * The chart, in either mode. The Timeline draws one line per drawn Artist, by Standing or by
- * cumulative Scrobbles, always including the Pinned Artists; the Spotlight draws the Spotlit
- * Artist's Standing alone on a log axis fixed to their worst. The wheel zooms and dragging pans
+ * cumulative Scrobbles, always including the Pinned Artists; the static Spotlight draws the Spotlit
+ * Artist's Standing alone on a log axis fixed to their worst, and the dynamic one draws them and
+ * their Neighbours in a band of Standings following them. The wheel zooms and dragging pans
  * the time axis only; clicking glides the Focus Day there. Hovering a line while the view is still
  * opens a card of its details, as `renderDetails` renders them, on the Day under the pointer.
  */
@@ -155,6 +171,7 @@ export function Chart({
     const [ends] = useState<EasedEnds>(() => ({
         scrobblesTop: createStore(() => ({ end: 1, easedAt: undefined })),
         standingBottom: createStore(() => ({ end: SPOTLIGHT_FLOOR, easedAt: undefined })),
+        bandBest: createStore(() => ({ end: 1, easedAt: undefined })),
     }));
     const timeline = useTimeline();
     const size = useSize(figure);
@@ -222,7 +239,8 @@ const fittedDay = (playhead: number, from: DayIndex, to: DayIndex): DayIndex =>
  * the playhead if the future is hidden, then the time axis, the Focus Day marker and the Artist
  * labels riding the lines at the playhead. In Scrobbles mode it keeps painting while the
  * axis eases toward the most Scrobbles drawn up to the playhead, and in the Spotlight while its
- * bottom eases toward the Spotlit Artist's worst Standing. A hovered line is emphasised, and any
+ * bottom eases toward the Spotlit Artist's worst Standing, or its band toward their Standing at the
+ * playhead. A hovered line is emphasised, and any
  * change to the view or to what is drawn closes its card.
  */
 function useFrames(
@@ -231,10 +249,18 @@ function useFrames(
     { timeAxis, marker, labels }: PaintedParts,
     tables: StandingsTables,
     x: number,
-    { yAxis, belowTopX, lineShape, linesDrawn, hideFuture }: ChartOptions,
+    {
+        yAxis,
+        belowTopX,
+        lineShape,
+        linesDrawn,
+        hideFuture,
+        spotlightMode,
+        neighbours,
+    }: ChartOptions,
     drawn: DrawnArtists,
     size: Size | undefined,
-    { scrobblesTop, standingBottom }: EasedEnds,
+    { scrobblesTop, standingBottom, bandBest }: EasedEnds,
     hover: LineHover,
 ) {
     useEffect(() => {
@@ -304,13 +330,20 @@ function useFrames(
             return {
                 artists,
                 scale: scaleOf(artists, fittedDay(playhead, from, to), now),
-                dashed: dashedSpans(tables, pinned, x, dayX, from, to),
-                width: LINE_WIDTH,
+                style: {
+                    dashed: dashedSpans(tables, pinned, x, dayX, from, to),
+                    featured: undefined,
+                },
+                overhang: OVERHANG_PX,
             };
         };
 
         // The Spotlit Artist's line alone, on a log axis down to their worst Standing so far.
-        const spotlightLines = (artist: ArtistId, { playhead }: View, now: number): FrameLines => {
+        const staticSpotlightLines = (
+            artist: ArtistId,
+            { playhead }: View,
+            now: number,
+        ): FrameLines => {
             const bottom = spotlightBottom(tables, artist, { playhead, hideFuture });
             return {
                 artists: [artist],
@@ -319,10 +352,34 @@ function useFrames(
                     shape: lineShape,
                     standingY: spotlightY(plot, ease(standingBottom, bottom, now)),
                 },
-                dashed: NOT_DASHED,
-                width: SPOTLIGHT_LINE_WIDTH,
+                style: { dashed: NOT_DASHED, featured: artist },
+                overhang: OVERHANG_PX,
             };
         };
+
+        // The Spotlit Artist and their Neighbours on the Day nearest the playhead, in a band
+        // following the Spotlit Artist there and clipped to it.
+        const dynamicSpotlightLines = (
+            artist: ArtistId,
+            { playhead }: View,
+            now: number,
+        ): FrameLines => {
+            const day = dayIndex(Math.min(last, Math.max(0, Math.round(playhead))));
+            const { best } = spotlightBand(tables, artist, day, neighbours);
+            return {
+                artists: spotlitLines(tables, artist, day, neighbours),
+                scale: {
+                    yAxis: "standing",
+                    shape: lineShape,
+                    standingY: bandY(plot, ease(bandBest, best, now), neighbours),
+                },
+                style: { dashed: NOT_DASHED, featured: artist },
+                overhang: 0,
+            };
+        };
+
+        const spotlightLines =
+            spotlightMode === "dynamic" ? dynamicSpotlightLines : staticSpotlightLines;
 
         const draw = (now: number) => {
             const view = getView();
@@ -330,7 +387,7 @@ function useFrames(
             const dayX = dayScale(window, plot);
             const from = dayIndex(Math.max(0, Math.floor(window.start) - 1));
             const to = dayIndex(Math.min(last, Math.ceil(hideFuture ? playhead : window.end) + 1));
-            const { artists, scale, dashed, width } =
+            const { artists, scale, style, overhang } =
                 drawn.kind === "timeline"
                     ? timelineLines(drawn.pinned, view, dayX, from, to, now)
                     : spotlightLines(drawn.artist, view, now);
@@ -344,22 +401,19 @@ function useFrames(
             const right = hideFuture ? Math.min(plot.right, playheadX) : plot.right;
             context.rect(
                 plot.left,
-                plot.top - 4,
+                plot.top - overhang,
                 Math.max(0, right - plot.left),
-                plot.bottom - plot.top + 8,
+                plot.bottom - plot.top + 2 * overhang,
             );
             context.clip();
-            context.lineWidth = width;
+            context.lineWidth = LINE_WIDTH;
             const geometry = linesGeometry({ tables, artists, dayX, scale, from, to });
-            strokeLines(
-                context,
-                geometry,
-                scale,
-                dashed,
-                hoveredLine(hover.store.getState())?.artist,
-            );
+            strokeLines(context, geometry, scale, {
+                ...style,
+                emphasised: hoveredLine(hover.store.getState())?.artist,
+            });
             context.restore();
-            hover.painted({ tables, geometry, scale, dayX, plot, right });
+            hover.painted({ tables, geometry, scale, dayX, plot, right, overhang });
             if (timeAxis.current) placeTimeAxis(timeAxis.current, tables, dayX, size);
             if (marker.current) placeMarker(marker.current, playheadX, inView, size);
             if (labels.current)
@@ -375,7 +429,10 @@ function useFrames(
         // An axis end out of use starts afresh when next shown, rather than easing from where it was.
         if (drawn.kind === "spotlight" || yAxis === "standing")
             scrobblesTop.setState({ easedAt: undefined });
-        if (drawn.kind === "timeline") standingBottom.setState({ easedAt: undefined });
+        if (drawn.kind === "timeline" || spotlightMode === "dynamic")
+            standingBottom.setState({ easedAt: undefined });
+        if (drawn.kind === "timeline" || spotlightMode === "static")
+            bandBest.setState({ easedAt: undefined });
         hover.dispatch({ type: "dismissed" });
         draw(performance.now());
         const unsubscribe = subscribeView(() => {
@@ -402,10 +459,13 @@ function useFrames(
         lineShape,
         linesDrawn,
         hideFuture,
+        spotlightMode,
+        neighbours,
         drawn,
         size,
         scrobblesTop,
         standingBottom,
+        bandBest,
         hover,
     ]);
 }
@@ -454,17 +514,20 @@ interface LabelsFrame {
 /**
  * Puts each labelled Artist's dot on its line at the playhead and its boxed name beside it, the
  * boxes pushed apart so they don't overlap, with a leader back to the dot. Labels without a line
- * there, or out of view, are hidden.
+ * there, out of view, or whose line is outside the plot there, as a Neighbour's leaving the band,
+ * are hidden.
  */
 function placeLabels(
     group: SVGGElement,
     { geometry, scale, playheadX, plot, widthOf }: LabelsFrame,
 ) {
     const items = [...group.children].filter((item) => item instanceof SVGGElement);
+    const inPlot = (y: number | undefined) =>
+        y !== undefined && y >= plot.top - 0.5 && y <= plot.bottom + 0.5 ? y : undefined;
     const ys = items.map((item) =>
         playheadX === undefined
             ? undefined
-            : yOnLine(geometry, scale, artistId(Number(item.dataset.artist)), playheadX),
+            : inPlot(yOnLine(geometry, scale, artistId(Number(item.dataset.artist)), playheadX)),
     );
     const spread = spreadLabels(
         ys.filter((y) => y !== undefined),
@@ -583,7 +646,9 @@ function Overlay({
             height={size.height}
             className="pointer-events-none absolute inset-0 text-[11px] text-foreground"
         >
-            {mode.kind === "spotlight" ? (
+            {mode.kind === "spotlight" && options.spotlightMode === "dynamic" ? (
+                <BandAxis plot={plot} best={ends.bandBest} neighbours={options.neighbours} />
+            ) : mode.kind === "spotlight" ? (
                 <SpotlightAxis plot={plot} bottom={ends.standingBottom} />
             ) : options.yAxis === "standing" ? (
                 <StandingAxis
@@ -620,18 +685,30 @@ function Overlay({
                     {dayDate(tables, focusDay)}
                 </text>
             </g>
-            <ArtistLabels artists={labelledArtists(tables, focusDay, x, mode)} group={labels} />
+            <ArtistLabels
+                artists={labelledArtists(tables, focusDay, x, options, mode)}
+                group={labels}
+            />
         </svg>
     );
 }
 
-/** The Spotlit Artist alone, or the Focus Day's Top X and then the Pinned Artists outside it. */
+/**
+ * The Spotlit Artist alone or with their Neighbours on the Focus Day, or the Focus Day's Top X and
+ * then the Pinned Artists outside it.
+ */
 const labelledArtists = (
     tables: StandingsTables,
     day: DayIndex,
     x: number,
+    { spotlightMode, neighbours }: ChartOptions,
     mode: ChartMode,
 ): NamedArtist[] => {
+    if (mode.kind === "spotlight" && spotlightMode === "dynamic")
+        return spotlitLines(tables, mode.artist.id, day, neighbours).flatMap((id) => {
+            const artist = tables.artists[id];
+            return artist === undefined ? [] : [{ id, artist }];
+        });
     if (mode.kind === "spotlight") return [mode.artist];
     const top = topX(tables, day, x);
     return [...top, ...mode.pins.filter((pin) => !top.some((row) => row.id === pin.id))];

@@ -33,4 +33,5 @@ export { Progress } from "./progress";
 export { Separator } from "./separator";
 export { Slider } from "./slider";
 export { Switch } from "./switch";
+export { ToggleGroup, ToggleGroupItem } from "./toggle-group";
 export { cn } from "./utils";

@@ -9,10 +9,12 @@ import {
 } from "d3-shape";
 import type { LineShape } from "../settings";
 import {
+    asStanding,
+    scrobblesAt,
     UNRANKED,
-    valueAt,
     type ArtistId,
     type DayIndex,
+    type Standing,
     type StandingsTables,
 } from "../standings";
 import { dailySegments, sCurveSegments, yAlong, type Point } from "./geometry";
@@ -57,7 +59,7 @@ export type LinesScale =
           yAxis: "standing";
           shape: LineShape;
           /** The pixel y of a Standing, as the Timeline or the Spotlight lays Standings out. */
-          standingY: (standing: number) => number;
+          standingY: (standing: Standing) => number;
       }
     | {
           yAxis: "scrobbles";
@@ -93,7 +95,7 @@ function artistY(tables: StandingsTables, scale: LinesScale): ArtistY {
     const { standingY } = scale;
     return (artist) => (day) => {
         const standing = tables.standing[day * artistCount + artist]!;
-        return standing === UNRANKED ? undefined : standingY(standing);
+        return standing === UNRANKED ? undefined : standingY(asStanding(standing));
     };
 }
 
@@ -143,18 +145,45 @@ function clipToSpans(
 const DIMMED_ALPHA = 0.2;
 /** How much thicker an emphasised line is drawn. */
 const EMPHASIS_WIDTH = 2;
+/** How much thicker the featured line is drawn, such as the Spotlit Artist's. */
+const FEATURED_WIDTH = 5 / 3;
+/** How opaque the lines beside a featured one are drawn, such as the Neighbours'. */
+const BESIDE_FEATURED_ALPHA = 0.55;
+
+/** How the lines of one frame are told apart. */
+export interface LinesStyle {
+    /** Where each Pinned Artist's line is dashed. */
+    dashed: DashedSpans;
+    /** The line drawn thicker over fainter others, as the Spotlit Artist's over their Neighbours'. */
+    featured: ArtistId | undefined;
+    /** The hovered line, drawn thicker still over dimmed others. */
+    emphasised: ArtistId | undefined;
+}
+
+/** A line's opacity: dimmed beside an emphasised line, fainter beside a featured one. */
+const alphaOf = (artist: ArtistId, { featured, emphasised }: LinesStyle): number => {
+    if (emphasised !== undefined) return artist === emphasised ? 1 : DIMMED_ALPHA;
+    return featured === undefined || artist === featured ? 1 : BESIDE_FEATURED_ALPHA;
+};
+
+/** How many times the base width a line is drawn. */
+const widthOf = (artist: ArtistId, { featured, emphasised }: LinesStyle): number =>
+    (artist === featured ? FEATURED_WIDTH : 1) * (artist === emphasised ? EMPHASIS_WIDTH : 1);
+
+/** Draw order: the featured line over the others, and the emphasised line over everything. */
+const layerOf = (artist: ArtistId, { featured, emphasised }: LinesStyle): number =>
+    artist === emphasised ? 2 : artist === featured ? 1 : 0;
 
 /**
  * Strokes each line of `geometry` onto `context` with the curve the scale asks for, dashed within
- * its `dashed` spans and solid elsewhere. An `emphasised` line is drawn thicker, on top of the
- * others, which are dimmed.
+ * its `dashed` spans and solid elsewhere. A `featured` line is drawn thicker over the others, which
+ * are fainter, and an `emphasised` one thicker still, over the others, which are dimmed.
  */
 export function strokeLines(
     context: CanvasRenderingContext2D,
     geometry: LinesGeometry,
     scale: LinesScale,
-    dashed: DashedSpans,
-    emphasised?: ArtistId,
+    style: LinesStyle,
 ): void {
     const curve =
         scale.yAxis === "scrobbles"
@@ -170,17 +199,19 @@ export function strokeLines(
         context.stroke();
     };
     const width = context.lineWidth;
-    const emphasis = emphasised !== undefined && geometry.has(emphasised) ? emphasised : undefined;
-    // The emphasised line goes last, so it is drawn over the others.
-    const ordered = [...geometry].toSorted(
-        ([a], [b]) => Number(a === emphasis) - Number(b === emphasis),
-    );
+    const drawn: LinesStyle = {
+        ...style,
+        emphasised:
+            style.emphasised !== undefined && geometry.has(style.emphasised)
+                ? style.emphasised
+                : undefined,
+    };
+    const ordered = [...geometry].toSorted(([a], [b]) => layerOf(a, drawn) - layerOf(b, drawn));
     for (const [artist, segments] of ordered) {
-        const isEmphasised = artist === emphasis;
-        context.globalAlpha = emphasis !== undefined && !isEmphasised ? DIMMED_ALPHA : 1;
-        context.lineWidth = isEmphasised ? width * EMPHASIS_WIDTH : width;
+        context.globalAlpha = alphaOf(artist, drawn);
+        context.lineWidth = width * widthOf(artist, drawn);
         context.strokeStyle = colorOf(artist);
-        const spans = dashed.get(artist) ?? [];
+        const spans = drawn.dashed.get(artist) ?? [];
         if (spans.length === 0) {
             stroke(segments, SOLID);
             continue;
@@ -216,8 +247,4 @@ export const mostScrobbles = (
     tables: StandingsTables,
     artists: readonly ArtistId[],
     day: DayIndex,
-): number =>
-    artists.reduce(
-        (most, artist) => Math.max(most, valueAt(tables, artist, day, "scrobbles") ?? 0),
-        0,
-    );
+): number => artists.reduce((most, artist) => Math.max(most, scrobblesAt(tables, artist, day)), 0);

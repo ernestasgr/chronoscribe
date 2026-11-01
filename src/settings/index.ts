@@ -24,6 +24,10 @@ export type LineShape = (typeof LINE_SHAPES)[number];
 export const LINES_RULES = ["warm-up", "no-warm-up", "seven-days"] as const;
 export type LinesRule = (typeof LINES_RULES)[number];
 
+/** Whether the Spotlight's axis is fixed from #1 to the Spotlit Artist's worst, or a band following them. */
+export const SPOTLIGHT_MODES = ["static", "dynamic"] as const;
+export type SpotlightMode = (typeof SPOTLIGHT_MODES)[number];
+
 /** The Top X sizes offered. */
 export const TOP_X = { min: 1, max: 100 } as const;
 /** The playback speeds offered, in seconds per Day. */
@@ -33,6 +37,9 @@ export const STEP_DAYS = { min: 1, max: 365 } as const;
 /** The Window sizes offered, in Days. */
 export const SOUNDTRACK_DAYS = { min: 1, max: 3650 } as const;
 
+/** The Neighbours offered, in ranks either side of the Spotlit Artist. */
+export const NEIGHBOURS = { min: 1, max: 25 } as const;
+
 /** A Top X size, for the stored row and for what the user types alike. */
 export const TopXSize = z.number().int().min(TOP_X.min).max(TOP_X.max);
 /** A playback speed, for the stored row and for what the user types alike. */
@@ -41,6 +48,10 @@ export const SecondsPerDay = z.number().min(SECONDS_PER_DAY.min).max(SECONDS_PER
 export const StepDays = z.number().int().min(STEP_DAYS.min).max(STEP_DAYS.max);
 /** A Window size, for the stored row and for what the user types alike. */
 export const SoundtrackDays = z.number().int().min(SOUNDTRACK_DAYS.min).max(SOUNDTRACK_DAYS.max);
+/** A Spotlight mode, for the stored row and for the toggle's value alike. */
+export const SpotlightModeChoice = z.enum(SPOTLIGHT_MODES);
+/** A count of Neighbours, for the stored row and for what the user types alike. */
+export const NeighbourCount = z.number().int().min(NEIGHBOURS.min).max(NEIGHBOURS.max);
 
 /** The app-wide settings: the last.fm API key, the chart's options and the Player's. */
 export interface AppSettings {
@@ -54,6 +65,10 @@ export interface AppSettings {
     linesDrawn: LinesRule;
     /** Whether lines ahead of the playhead are hidden, so the future isn't given away. */
     hideFuture: boolean;
+    /** Whether the Spotlight shows the Spotlit Artist alone, or in a band with their Neighbours. */
+    spotlightMode: SpotlightMode;
+    /** How many ranks either side of the Spotlit Artist the dynamic Spotlight shows as Neighbours. */
+    neighbours: number;
     /** Playback speed, in seconds per Day. */
     secondsPerDay: number;
     /** How many Days the step control and the `,` and `.` keys move by. */
@@ -75,6 +90,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     lineShape: "s-curves",
     linesDrawn: "warm-up",
     hideFuture: true,
+    spotlightMode: "static",
+    neighbours: 5,
     secondsPerDay: 0.1,
     stepDays: 1,
     soundtrackDays: 30,
@@ -92,6 +109,8 @@ const AppSettingsSchema = z.object({
     lineShape: z.enum(LINE_SHAPES).catch(DEFAULT_SETTINGS.lineShape),
     linesDrawn: z.enum(LINES_RULES).catch(DEFAULT_SETTINGS.linesDrawn),
     hideFuture: z.boolean().catch(DEFAULT_SETTINGS.hideFuture),
+    spotlightMode: SpotlightModeChoice.catch(DEFAULT_SETTINGS.spotlightMode),
+    neighbours: NeighbourCount.catch(DEFAULT_SETTINGS.neighbours),
     secondsPerDay: SecondsPerDay.catch(DEFAULT_SETTINGS.secondsPerDay),
     stepDays: StepDays.catch(DEFAULT_SETTINGS.stepDays),
     soundtrackDays: SoundtrackDays.catch(DEFAULT_SETTINGS.soundtrackDays),

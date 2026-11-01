@@ -23,11 +23,19 @@ const idOf = (tables: StandingsTables, name: string) => artistId(tables.artists.
 const plot = { left: 0, right: 100, top: 0, bottom: 100 };
 const dayX = scaleLinear().domain([0, 2]).range([0, 100]);
 
-/** The frame a chart would hit-test, its lines drawn as `scale` asks, up to `right` px. */
-function frameOf(tables: StandingsTables, scale: LinesScale, right = plot.right): HitFrame {
+/**
+ * The frame a chart would hit-test, its lines drawn as `scale` asks, up to `right` px and
+ * `overhang` px past the plot's top and bottom.
+ */
+function frameOf(
+    tables: StandingsTables,
+    scale: LinesScale,
+    right = plot.right,
+    overhang = 4,
+): HitFrame {
     const artists = tables.artists.map((_, i) => artistId(i));
     const geometry = linesGeometry({ tables, artists, dayX, scale, from: 0, to: 2 });
-    return { tables, geometry, scale, dayX, plot, right };
+    return { tables, geometry, scale, dayX, plot, right, overhang };
 }
 
 describe("lineAt", () => {
@@ -76,6 +84,15 @@ describe("lineAt", () => {
         expect(lineAt(hidden, [48, 50])).toBeUndefined();
         // Nearer Day 1, which is hidden, so the dot goes on Day 0.
         expect(lineAt(hidden, [30, 50])).toMatchObject({ day: dayIndex(0), x: 0 });
+    });
+
+    test("finds nothing where a line is clipped past the plot, as a Neighbour's leaving the band", () => {
+        // Tricky, #3, runs at 103 px, just under the plot.
+        const leaving: LinesScale = { ...standing, standingY: (rank) => 45 * rank - 32 };
+        expect(lineAt(frameOf(tables, leaving, plot.right, 0), [50, 101])).toBeUndefined();
+        expect(lineAt(frameOf(tables, leaving, plot.right, 4), [50, 101])?.artist).toBe(
+            idOf(tables, "Tricky"),
+        );
     });
 
     test("gives lines the pointer is equally near to the better Standing", () => {

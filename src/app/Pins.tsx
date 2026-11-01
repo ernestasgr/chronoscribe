@@ -1,6 +1,6 @@
 import { PinIcon, SpotlightIcon, XIcon } from "lucide-react";
 import type { ListenerRow } from "../db";
-import { valueAt, type DayIndex, type PinnedArtist, type StandingsTables } from "../standings";
+import { standingAt, type DayIndex, type PinnedArtist, type StandingsTables } from "../standings";
 import { Badge, Button } from "../ui";
 import { ArtistSearch } from "./ArtistSearch";
 import { standingLabel } from "./labels";
@@ -42,7 +42,7 @@ export function Pins({
                         <Badge variant="secondary" className="gap-1 pr-0.5">
                             {artist}{" "}
                             <span className="text-muted-foreground tabular-nums">
-                                {standingLabel(valueAt(tables, id, day, "standing"))}
+                                {standingLabel(standingAt(tables, id, day))}
                             </span>
                             <Button
                                 variant="ghost"
