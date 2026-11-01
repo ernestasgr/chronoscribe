@@ -143,15 +143,22 @@ function clipToSpans(
     context.clip("evenodd");
 }
 
+/** How opaque the other lines are drawn while one is emphasised. */
+const DIMMED_ALPHA = 0.2;
+/** How much thicker an emphasised line is drawn. */
+const EMPHASIS_WIDTH = 2;
+
 /**
  * Strokes each line of `geometry` onto `context` with the curve the scale asks for, dashed within
- * its `dashed` spans and solid elsewhere.
+ * its `dashed` spans and solid elsewhere. An `emphasised` line is drawn thicker, on top of the
+ * others, which are dimmed.
  */
 export function strokeLines(
     context: CanvasRenderingContext2D,
     geometry: LinesGeometry,
     scale: LinesScale,
     dashed: DashedSpans,
+    emphasised?: ArtistId,
 ): void {
     const curve =
         scale.yAxis === "scrobbles"
@@ -166,7 +173,16 @@ export function strokeLines(
         for (const segment of segments) path(segment);
         context.stroke();
     };
-    for (const [artist, segments] of geometry) {
+    const width = context.lineWidth;
+    const emphasis = emphasised !== undefined && geometry.has(emphasised) ? emphasised : undefined;
+    // The emphasised line goes last, so it is drawn over the others.
+    const ordered = [...geometry].toSorted(
+        ([a], [b]) => Number(a === emphasis) - Number(b === emphasis),
+    );
+    for (const [artist, segments] of ordered) {
+        const isEmphasised = artist === emphasis;
+        context.globalAlpha = emphasis !== undefined && !isEmphasised ? DIMMED_ALPHA : 1;
+        context.lineWidth = isEmphasised ? width * EMPHASIS_WIDTH : width;
         context.strokeStyle = colorOf(artist);
         const spans = dashed.get(artist) ?? [];
         if (spans.length === 0) {
@@ -184,6 +200,8 @@ export function strokeLines(
         }
     }
     context.setLineDash(SOLID);
+    context.globalAlpha = 1;
+    context.lineWidth = width;
 }
 
 /** Where an Artist's drawn line is at pixel `x`, or undefined if it isn't drawn there. */

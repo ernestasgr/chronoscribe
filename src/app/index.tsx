@@ -4,11 +4,12 @@ import { openDb, type Db } from "../db";
 import { createEventBus, type Emitter } from "../events";
 import { createIngest, type IngestEvents } from "../ingest";
 import { browserSpotify, spotifyClientId } from "../spotify";
+import { daySpan, trackPlays } from "../standings";
 import { createTimeline, createWorkerBuild, TimelineContext } from "../timeline";
 import { App } from "./App";
 import { createConnection, type ConnectionEvents } from "./connection";
 import { createFailures, type Failures } from "./failures";
-import { ServicesContext } from "./services";
+import { ServicesContext, type ReadTrackPlays } from "./services";
 import { createSession } from "./session";
 import { createSettings } from "./settings";
 import { createSoundtrackPlayer, type SetTimer } from "./soundtrackPlayer";
@@ -34,6 +35,14 @@ async function connectSpotify(db: Db, events: Emitter<ConnectionEvents>, failure
     void connection.finishSignIn(location.href);
     return { connection, port };
 }
+
+/** Reads only the stored Scrobbles around the Day, then counts the Artist's Track plays in it. */
+const trackPlaysFrom =
+    (db: Db): ReadTrackPlays =>
+    async (listenerId, tables, day, artist) => {
+        const { from, to } = daySpan(tables, day);
+        return trackPlays(tables, day, artist, await db.scrobblesBetween(listenerId, from, to));
+    };
 
 const setTimer: SetTimer = (run, ms) => {
     const timer = setTimeout(run, ms);
@@ -102,6 +111,7 @@ export async function boot(root: HTMLElement): Promise<void> {
                     spotify: spotify?.connection,
                     soundtrackPlayer,
                     now: Date.now,
+                    readTrackPlays: trackPlaysFrom(db),
                 }}
             >
                 <TimelineContext value={timeline}>
