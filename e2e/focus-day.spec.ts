@@ -43,6 +43,20 @@ const longNames: FixtureUser = {
     ],
 };
 
+const at = (day: string, minutes: number) =>
+    new Date(Date.parse(`${day}T00:00:00Z`) + minutes * 60_000).toISOString();
+const many = (i: number) => `Many ${String(i).padStart(3, "0")}`;
+
+// 1 July: Many 000–299 hold #1–#300 on 1 Scrobble each, in the order they played.
+// 2 July: each plays once more, last first, so Many 299–150 climb from ↑299 down to ↑1.
+const crowd: FixtureUser = {
+    username: "Crowd",
+    history: [
+        ...Array.from({ length: 300 }, (_, i) => scrobbles(many(i), 1, at("2026-07-01", i))),
+        ...Array.from({ length: 300 }, (_, i) => scrobbles(many(299 - i), 1, at("2026-07-02", i))),
+    ].flat(),
+};
+
 test.use({ timezoneId: "UTC" });
 
 const climbers = (page: Page) =>
@@ -107,6 +121,28 @@ test("Climbers fold the long tail by default, and the mode survives a reload", a
     await expect(page.getByRole("combobox", { name: "Climbers" })).toHaveValue("all");
     await focusOn(page, "2026-07-02", "2026-07-01");
     await expect.poll(() => climbers(page)).toHaveLength(4);
+});
+
+test("a long list of Climbers scrolls in its own box, showing the rows scrolled to", async ({
+    page,
+}) => {
+    await page.clock.setFixedTime(new Date("2026-07-02T12:00:00Z"));
+    await serveLastfm(page, [crowd]);
+    await importListener(page, "Crowd");
+    await page.getByRole("combobox", { name: "Climbers" }).selectOption({ label: "all (raw)" });
+
+    await focusOn(page, "2026-07-02", "2026-07-01");
+    const list = focusDay(page).getByRole("list", { name: "Climbers" });
+    const rows = list.getByRole("listitem");
+    await expect(rows.first()).toHaveText("#1 Many 299 ↑299");
+    await expect(rows.first()).toHaveAttribute("aria-setsize", "150");
+    expect(await rows.count()).toBeLessThan(150);
+
+    await list.hover();
+    await page.mouse.wheel(0, 10_000);
+    await expect(list.getByRole("button", { name: "Spotlight Many 150" })).toBeInViewport();
+    await expect(rows.last()).toHaveText("#150 Many 150 ↑1");
+    await expect(rows.last()).toHaveAttribute("aria-posinset", "150");
 });
 
 test("on a wide screen, the columns sit side by side with room between them, and no row overflows", async ({
