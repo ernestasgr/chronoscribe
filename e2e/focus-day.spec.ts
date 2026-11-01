@@ -22,6 +22,27 @@ const longtail: FixtureUser = {
     ],
 };
 
+// Long names don't widen Top X: they're truncated, as the Climbers beside them need the room.
+const longNames: FixtureUser = {
+    username: "Longnames",
+    history: [
+        ...scrobbles(
+            "Huey Lewis & The News Greatest Hits Live In Concert",
+            40,
+            "2026-07-01T08:00:00Z",
+        ),
+        ...scrobbles("Modern Talking", 30, "2026-07-01T09:00:00Z"),
+        ...scrobbles(
+            "Huey Lewis & The News Greatest Hits Live In Concert",
+            3,
+            "2026-07-02T08:00:00Z",
+        ),
+        ...scrobbles("Kim Wilde", 2, "2026-07-01T10:00:00Z"),
+        ...scrobbles("Modern Talking", 1, "2026-07-02T09:00:00Z"),
+        ...scrobbles("Kim Wilde", 35, "2026-07-02T10:00:00Z"),
+    ],
+};
+
 test.use({ timezoneId: "UTC" });
 
 const climbers = (page: Page) =>
@@ -86,4 +107,31 @@ test("Climbers fold the long tail by default, and the mode survives a reload", a
     await expect(page.getByRole("combobox", { name: "Climbers" })).toHaveValue("all");
     await focusOn(page, "2026-07-02", "2026-07-01");
     await expect.poll(() => climbers(page)).toHaveLength(4);
+});
+
+test("on a wide screen, the columns sit side by side with room between them, and no row overflows", async ({
+    page,
+}) => {
+    await page.clock.setFixedTime(new Date("2026-07-10T12:00:00Z"));
+    await page.setViewportSize({ width: 1920, height: 1000 });
+    await serveLastfm(page, [longNames]);
+    await importListener(page, "Longnames");
+
+    await focusOn(page, "2026-07-02", "2026-07-01");
+    const topX = focusDay(page).getByRole("list", { name: "Top X" });
+    const climbersHeading = focusDay(page).getByRole("heading", { name: "Climbers" });
+    const climbersList = focusDay(page).getByRole("list", { name: "Climbers" });
+    await expect(climbersList).toBeVisible();
+
+    const column = (await topX.boundingBox())!;
+    const heading = (await climbersHeading.boundingBox())!;
+    expect(heading.x - (column.x + column.width)).toBeGreaterThanOrEqual(24);
+    // The Climbers list starts just under its heading, not down where the Top X list ends.
+    const list = (await climbersList.boundingBox())!;
+    expect(list.y - heading.y).toBeLessThan(60);
+
+    const overflowing = await focusDay(page)
+        .locator('[aria-label="Top X"] > li, [aria-label="Climbers"] > li')
+        .evaluateAll((rows) => rows.filter((row) => row.scrollWidth > row.clientWidth).length);
+    expect(overflowing).toBe(0);
 });

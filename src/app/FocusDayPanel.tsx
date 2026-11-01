@@ -48,7 +48,7 @@ export function FocusDayPanel({
                 </p>
             </header>
             <Separator />
-            <div className="grid gap-4 2xl:grid-cols-2 2xl:gap-6">
+            <div className="grid gap-4 2xl:grid-cols-2 2xl:gap-8">
                 <TopX tables={tables} day={day} x={x} />
                 <Separator className="2xl:hidden" />
                 <Climbers tables={tables} day={day} x={x} mode={mode} />
@@ -67,21 +67,23 @@ function TopX({ tables, day, x }: { tables: StandingsTables; day: DayIndex; x: n
     useFlip(list);
 
     return (
-        <section className="grid gap-2">
+        <section className="grid min-w-0 content-start gap-2">
             <h3 className="text-sm font-medium text-muted-foreground">Top {x}</h3>
-            <ol ref={list} aria-label="Top X" className="grid gap-2">
+            <ol ref={list} aria-label="Top X" className="grid grid-cols-1 gap-2">
                 {rows.map((row) => (
-                    <li key={row.artist} data-flip={row.artist} className="grid gap-1">
-                        <div className="flex items-baseline gap-2 text-sm">
-                            <span className="w-8 text-muted-foreground tabular-nums">
+                    <li key={row.artist} data-flip={row.artist} className="grid min-w-0 gap-1">
+                        <div className="flex min-w-0 items-baseline gap-2 text-sm">
+                            <span className="w-8 shrink-0 text-muted-foreground tabular-nums">
                                 #{row.standing}
                             </span>{" "}
-                            <span className="flex-1 truncate font-medium">{row.artist}</span>{" "}
-                            <span className="font-medium tabular-nums">
+                            <span className="min-w-0 flex-1 truncate font-medium">
+                                {row.artist}
+                            </span>{" "}
+                            <span className="shrink-0 font-medium tabular-nums">
                                 +{row.dailyPlays.toLocaleString("en")}
                             </span>
                         </div>{" "}
-                        <div className="ml-10 flex items-center gap-2">
+                        <div className="ml-10 flex min-w-0 items-center gap-2">
                             <span
                                 role="meter"
                                 aria-label="Daily plays"
@@ -89,14 +91,14 @@ function TopX({ tables, day, x }: { tables: StandingsTables; day: DayIndex; x: n
                                 aria-valuemin={0}
                                 aria-valuemax={most}
                                 title={count(row.dailyPlays, "Daily play")}
-                                className="block h-1 flex-1 overflow-hidden rounded-full bg-muted"
+                                className="block h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted"
                             >
                                 <span
                                     className="block h-full rounded-full bg-primary transition-[width] duration-300 ease-in-out"
                                     style={{ width: `${(100 * row.dailyPlays) / most}%` }}
                                 />
                             </span>
-                            <span className="text-xs text-muted-foreground tabular-nums">
+                            <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
                                 {row.cumulative.toLocaleString("en")}
                             </span>
                         </div>
@@ -121,7 +123,7 @@ function Climbers({
     const { listed, folded } = climbers(tables, day, mode, x);
 
     return (
-        <section className="grid gap-2">
+        <section className="grid min-w-0 content-start gap-2">
             <h3 className="text-sm font-medium text-muted-foreground">Climbers</h3>
             <ClimberList label="Climbers" rows={listed} />
             {listed.length === 0 && !folded && (
@@ -152,12 +154,14 @@ function Climbers({
 
 function ClimberList({ label, rows }: { label: string; rows: Climber[] }) {
     return (
-        <ol aria-label={label} className="grid gap-1.5">
+        <ol aria-label={label} className="grid grid-cols-1 gap-1.5">
             {rows.map((row) => (
-                <li key={row.artist} className="flex items-center gap-2 text-sm">
-                    <span className="w-8 text-muted-foreground tabular-nums">#{row.standing}</span>{" "}
-                    <span className="flex-1 truncate font-medium">{row.artist}</span>{" "}
-                    <span className="text-emerald-600 tabular-nums dark:text-emerald-400">
+                <li key={row.artist} className="flex min-w-0 items-center gap-2 text-sm">
+                    <span className="w-8 shrink-0 text-muted-foreground tabular-nums">
+                        #{row.standing}
+                    </span>{" "}
+                    <span className="min-w-0 flex-1 truncate font-medium">{row.artist}</span>{" "}
+                    <span className="shrink-0 text-emerald-600 tabular-nums dark:text-emerald-400">
                         ↑{row.gain}
                     </span>
                     {row.debut && (
