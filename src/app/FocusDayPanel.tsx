@@ -1,5 +1,5 @@
 import { ChevronRightIcon } from "lucide-react";
-import { useRef } from "react";
+import { useRef, type ReactNode } from "react";
 import type { ClimbersMode } from "../settings";
 import {
     climbers,
@@ -7,8 +7,10 @@ import {
     dayDate,
     dayScrobbles,
     topX,
+    valueAt,
     type Climber,
     type DayIndex,
+    type NamedArtist,
     type StandingsTables,
 } from "../standings";
 import {
@@ -21,19 +23,61 @@ import {
     Separator,
 } from "../ui";
 import { useFlip } from "./flip";
-import { count } from "./labels";
+import { count, standingLabel } from "./labels";
+import { useServices } from "./services";
 
-/** The Focus Day's date and Scrobbles, its Top X with their Daily plays, and its Climbers. */
+/** A row's look when it is the Spotlit Artist's, marked with `aria-current`. */
+const SPOTLIT_ROW = "-mx-1 rounded-md px-1 aria-[current=true]:bg-accent";
+
+/**
+ * An Artist's row as a button that opens the Spotlight on them: their Standing, their name, then
+ * what the list reports of them.
+ */
+function ArtistRowButton({
+    artist,
+    standing,
+    children,
+}: {
+    artist: string;
+    standing: number | undefined;
+    children: ReactNode;
+}) {
+    const { session } = useServices();
+    return (
+        <Button
+            variant="ghost"
+            aria-label={`Spotlight ${artist}`}
+            onClick={() => session.spotlight(artist)}
+            className="group h-auto w-full min-w-0 justify-start gap-2 p-0 text-left font-normal hover:bg-transparent dark:hover:bg-transparent"
+        >
+            <span className="w-8 shrink-0 text-muted-foreground tabular-nums">
+                {standingLabel(standing)}
+            </span>{" "}
+            <span className="min-w-0 flex-1 truncate font-medium group-hover:underline">
+                {artist}
+            </span>{" "}
+            {children}
+        </Button>
+    );
+}
+
+/**
+ * The Focus Day's date and Scrobbles, its Top X with their Daily plays, and its Climbers. Clicking
+ * an Artist's row opens the Spotlight on them; the Spotlit Artist's rows are highlighted, and
+ * shown under the Top X when they're outside it.
+ */
 export function FocusDayPanel({
     tables,
     day,
     x,
     mode,
+    spotlit,
 }: {
     tables: StandingsTables;
     day: DayIndex;
     x: number;
     mode: ClimbersMode;
+    spotlit: NamedArtist | undefined;
 }) {
     return (
         <Card
@@ -49,15 +93,25 @@ export function FocusDayPanel({
             </header>
             <Separator />
             <div className="grid gap-4 2xl:grid-cols-2 2xl:gap-8">
-                <TopX tables={tables} day={day} x={x} />
+                <TopX tables={tables} day={day} x={x} spotlit={spotlit} />
                 <Separator className="2xl:hidden" />
-                <Climbers tables={tables} day={day} x={x} mode={mode} />
+                <Climbers tables={tables} day={day} x={x} mode={mode} spotlit={spotlit} />
             </div>
         </Card>
     );
 }
 
-function TopX({ tables, day, x }: { tables: StandingsTables; day: DayIndex; x: number }) {
+function TopX({
+    tables,
+    day,
+    x,
+    spotlit,
+}: {
+    tables: StandingsTables;
+    day: DayIndex;
+    x: number;
+    spotlit: NamedArtist | undefined;
+}) {
     const rows = topX(tables, day, x).map((row) => ({
         ...row,
         dailyPlays: dailyPlays(tables, day, row.id),
@@ -65,24 +119,24 @@ function TopX({ tables, day, x }: { tables: StandingsTables; day: DayIndex; x: n
     const most = Math.max(1, ...rows.map((row) => row.dailyPlays));
     const list = useRef<HTMLOListElement>(null);
     useFlip(list);
+    const spotlitOutside = spotlit && !rows.some((row) => row.id === spotlit.id);
 
     return (
         <section className="grid min-w-0 content-start gap-2">
             <h3 className="text-sm font-medium text-muted-foreground">Top {x}</h3>
             <ol ref={list} aria-label="Top X" className="grid grid-cols-1 gap-2">
                 {rows.map((row) => (
-                    <li key={row.artist} data-flip={row.artist} className="grid min-w-0 gap-1">
-                        <div className="flex min-w-0 items-baseline gap-2 text-sm">
-                            <span className="w-8 shrink-0 text-muted-foreground tabular-nums">
-                                #{row.standing}
-                            </span>{" "}
-                            <span className="min-w-0 flex-1 truncate font-medium">
-                                {row.artist}
-                            </span>{" "}
+                    <li
+                        key={row.artist}
+                        data-flip={row.artist}
+                        aria-current={row.id === spotlit?.id}
+                        className={`grid min-w-0 gap-1 ${SPOTLIT_ROW}`}
+                    >
+                        <ArtistRowButton artist={row.artist} standing={row.standing}>
                             <span className="shrink-0 font-medium tabular-nums">
                                 +{row.dailyPlays.toLocaleString("en")}
                             </span>
-                        </div>{" "}
+                        </ArtistRowButton>{" "}
                         <div className="ml-10 flex min-w-0 items-center gap-2">
                             <span
                                 role="meter"
@@ -105,7 +159,36 @@ function TopX({ tables, day, x }: { tables: StandingsTables; day: DayIndex; x: n
                     </li>
                 ))}
             </ol>
+            {spotlitOutside && <SpotlitOutsideTopX tables={tables} day={day} spotlit={spotlit} />}
         </section>
+    );
+}
+
+/** The Spotlit Artist's Standing (or "unranked") and Daily plays, when they're outside the Top X. */
+function SpotlitOutsideTopX({
+    tables,
+    day,
+    spotlit,
+}: {
+    tables: StandingsTables;
+    day: DayIndex;
+    spotlit: NamedArtist;
+}) {
+    const standing = valueAt(tables, spotlit.id, day, "standing");
+    return (
+        <div
+            role="group"
+            aria-label="Spotlit Artist"
+            className="-mx-1 flex min-w-0 items-baseline gap-2 rounded-md bg-accent px-1 py-1 text-sm"
+        >
+            <span className="min-w-8 shrink-0 text-muted-foreground tabular-nums">
+                {standingLabel(standing)}
+            </span>{" "}
+            <span className="min-w-0 flex-1 truncate font-medium">{spotlit.artist}</span>{" "}
+            <span className="shrink-0 font-medium tabular-nums">
+                +{dailyPlays(tables, day, spotlit.id).toLocaleString("en")}
+            </span>
+        </div>
     );
 }
 
@@ -114,18 +197,20 @@ function Climbers({
     day,
     x,
     mode,
+    spotlit,
 }: {
     tables: StandingsTables;
     day: DayIndex;
     x: number;
     mode: ClimbersMode;
+    spotlit: NamedArtist | undefined;
 }) {
     const { listed, folded } = climbers(tables, day, mode, x);
 
     return (
         <section className="grid min-w-0 content-start gap-2">
             <h3 className="text-sm font-medium text-muted-foreground">Climbers</h3>
-            <ClimberList label="Climbers" rows={listed} />
+            <ClimberList label="Climbers" rows={listed} spotlit={spotlit} />
             {listed.length === 0 && !folded && (
                 <p className="text-sm text-muted-foreground">Nobody climbed on this Day.</p>
             )}
@@ -144,7 +229,11 @@ function Climbers({
                         </Button>
                     </CollapsibleTrigger>
                     <CollapsibleContent className="pt-2">
-                        <ClimberList label="Long-tail Climbers" rows={folded.climbers} />
+                        <ClimberList
+                            label="Long-tail Climbers"
+                            rows={folded.climbers}
+                            spotlit={spotlit}
+                        />
                     </CollapsibleContent>
                 </Collapsible>
             )}
@@ -152,24 +241,34 @@ function Climbers({
     );
 }
 
-function ClimberList({ label, rows }: { label: string; rows: Climber[] }) {
+function ClimberList({
+    label,
+    rows,
+    spotlit,
+}: {
+    label: string;
+    rows: Climber[];
+    spotlit: NamedArtist | undefined;
+}) {
     return (
         <ol aria-label={label} className="grid grid-cols-1 gap-1.5">
             {rows.map((row) => (
-                <li key={row.artist} className="flex min-w-0 items-center gap-2 text-sm">
-                    <span className="w-8 shrink-0 text-muted-foreground tabular-nums">
-                        #{row.standing}
-                    </span>{" "}
-                    <span className="min-w-0 flex-1 truncate font-medium">{row.artist}</span>{" "}
-                    <span className="shrink-0 text-emerald-600 tabular-nums dark:text-emerald-400">
-                        ↑{row.gain}
-                    </span>
-                    {row.debut && (
-                        <>
-                            {" "}
-                            <Badge variant="secondary">debut</Badge>
-                        </>
-                    )}
+                <li
+                    key={row.artist}
+                    aria-current={row.id === spotlit?.id}
+                    className={`min-w-0 ${SPOTLIT_ROW}`}
+                >
+                    <ArtistRowButton artist={row.artist} standing={row.standing}>
+                        <span className="shrink-0 text-emerald-600 tabular-nums dark:text-emerald-400">
+                            ↑{row.gain}
+                        </span>
+                        {row.debut && (
+                            <>
+                                {" "}
+                                <Badge variant="secondary">debut</Badge>
+                            </>
+                        )}
+                    </ArtistRowButton>
                 </li>
             ))}
         </ol>

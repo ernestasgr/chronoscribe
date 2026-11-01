@@ -10,7 +10,13 @@ import { buildSoundtracks, buildStandings } from "../standings";
 import { createTimeline, type ListenerRef } from "../timeline";
 import type { ConnectionEvents } from "./connection";
 import { createFailures } from "./failures";
-import { createSession, transition, viewedListener, type SessionState } from "./session";
+import {
+    createSession,
+    spotlitArtist,
+    transition,
+    viewedListener,
+    type SessionState,
+} from "./session";
 import { createSettings } from "./settings";
 
 const API_KEY = "fixture-key";
@@ -595,6 +601,83 @@ describe("Pinned Artists", () => {
     });
 });
 
+/** The Spotlit Artist's name, while the Spotlight is open. */
+const spotlitOnScreen = (session: TestSession) => spotlitArtist(session.store.getState());
+
+describe("the Spotlight", () => {
+    let db: Db;
+    beforeEach(async () => {
+        db = openDb(`session-${crypto.randomUUID()}`);
+        await seed(db, bristol, { complete: true, lastViewedAt: NOW - 1000 });
+        await seed(db, bath, { complete: true, lastViewedAt: NOW - 2000 });
+    });
+
+    test("opens on an Artist, ignores the Artist already spotlit, swaps for another and closes", async () => {
+        const { session } = await setUp(db, { apiKey: API_KEY });
+        expect(spotlitOnScreen(session)).toBeUndefined();
+
+        session.spotlight("Massive Attack");
+        const opened = session.store.getState();
+        session.spotlight("Massive Attack");
+
+        expect(session.store.getState()).toBe(opened);
+        session.spotlight("Burial");
+        expect(spotlitOnScreen(session)).toBe("Burial");
+        session.closeSpotlight();
+        expect(spotlitOnScreen(session)).toBeUndefined();
+    });
+
+    test("leaves the window and the playhead as they were", async () => {
+        const { session, timeline, firstDay } = await setUp(db, { apiKey: API_KEY });
+        await expect.poll(firstDay).toEqual({ date: "2026-07-01", timeZone: "UTC" });
+        timeline.seek(3, { glide: false });
+        timeline.setWindow({ start: 2, end: 5 });
+
+        session.spotlight("Massive Attack");
+        session.closeSpotlight();
+
+        expect(timeline.getView()).toEqual({ playhead: 3, window: { start: 2, end: 5 } });
+    });
+
+    test("closes on switching Listener, and isn't kept through a reload", async () => {
+        const { session } = await setUp(db, { apiKey: API_KEY });
+        session.spotlight("Massive Attack");
+
+        await session.open(BATH);
+        expect(spotlitOnScreen(session)).toBeUndefined();
+        session.spotlight("Goldfrapp");
+        const reopened = await setUp(db, { apiKey: API_KEY });
+
+        expect(spotlitOnScreen(reopened.session)).toBeUndefined();
+    });
+
+    test("stays open through a rebuild of the tables that still name the Artist", async () => {
+        const { session, timeline, firstDay } = await setUp(db, { apiKey: API_KEY });
+        await expect.poll(firstDay).toEqual({ date: "2026-07-01", timeZone: "UTC" });
+        session.spotlight("Massive Attack");
+
+        await session.changeTimeZone("America/Los_Angeles");
+
+        await expect
+            .poll(firstDay)
+            .toEqual({ date: "2026-06-30", timeZone: "America/Los_Angeles" });
+        expect(timeline.store.getState().tables?.artists).toEqual(["Massive Attack"]);
+        expect(spotlitOnScreen(session)).toBe("Massive Attack");
+    });
+
+    test("closes quietly once a rebuild of the tables names no Artist by that name", async () => {
+        const { session, firstDay, failures } = await setUp(db, { apiKey: API_KEY });
+        await expect.poll(firstDay).toEqual({ date: "2026-07-01", timeZone: "UTC" });
+        // Burial's Scrobbles are gone from the rebuilt history, as a Sync can leave them.
+        session.spotlight("Burial");
+
+        await session.changeTimeZone("America/Los_Angeles");
+
+        await expect.poll(() => spotlitOnScreen(session)).toBeUndefined();
+        expect(failures.store.getState().latest).toBeUndefined();
+    });
+});
+
 describe("the session's transitions", () => {
     const bristolRow = {
         id: BRISTOL,
@@ -613,7 +696,7 @@ describe("the session's transitions", () => {
         listeners: [],
     };
     const dashboard: SessionState = {
-        screen: { kind: "dashboard", listenerId: BRISTOL },
+        screen: { kind: "dashboard", listenerId: BRISTOL, spotlit: undefined },
         apiKeyCheck: { kind: "idle" },
         listeners: [bristolRow],
     };

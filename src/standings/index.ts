@@ -332,6 +332,38 @@ export function valueAt(
     return standing === UNRANKED ? undefined : standing;
 }
 
+// The last Artist's worst Standing through each Day for each tables object; 0 before their debut.
+const worstStandingsMemo = new WeakMap<
+    StandingsTables,
+    { artist: ArtistId; worst: Uint16Array<ArrayBuffer> }
+>();
+
+/** An Artist's worst Standing so far on each Day, counted once per Artist so a frame reads one entry. */
+function worstStandingsOf(tables: StandingsTables, artist: ArtistId): Uint16Array<ArrayBuffer> {
+    const known = worstStandingsMemo.get(tables);
+    if (known?.artist === artist) return known.worst;
+    const artistCount = tables.artists.length;
+    const worst = new Uint16Array(tables.dayCount);
+    let running = 0;
+    for (let day = 0; day < tables.dayCount; day++) {
+        const standing = tables.standing[day * artistCount + artist]!;
+        if (standing !== UNRANKED && standing > running) running = standing;
+        worst[day] = running;
+    }
+    worstStandingsMemo.set(tables, { artist, worst });
+    return worst;
+}
+
+/** An Artist's worst Standing from their debut through `through`, undefined before the debut. */
+export function worstStanding(
+    tables: StandingsTables,
+    artist: ArtistId,
+    through: DayIndex,
+): number | undefined {
+    const worst = worstStandingsOf(tables, artist)[through] ?? 0;
+    return worst === 0 ? undefined : worst;
+}
+
 /** The runs of Days `from` through `to` on which `artist` is outside the Top X, unranked included. */
 export function daysOutsideTopX(
     tables: StandingsTables,
@@ -353,11 +385,14 @@ export function daysOutsideTopX(
     }, []);
 }
 
-/** A Pinned Artist found in the tables. */
-export interface PinnedArtist {
+/** An Artist found in the tables by their exact name, such as the Spotlit Artist. */
+export interface NamedArtist {
     id: ArtistId;
     artist: string;
 }
+
+/** A Pinned Artist found in the tables. */
+export type PinnedArtist = NamedArtist;
 
 // Each tables object's artist ids by name, built on the first lookup.
 const artistIdsMemo = new WeakMap<StandingsTables, ReadonlyMap<string, ArtistId>>();
@@ -374,7 +409,7 @@ function artistIdsOf(tables: StandingsTables): ReadonlyMap<string, ArtistId> {
 }
 
 /** The Artist named exactly `name` in `tables`, if there is one. */
-export function artistNamed(tables: StandingsTables, name: string): PinnedArtist | undefined {
+export function artistNamed(tables: StandingsTables, name: string): NamedArtist | undefined {
     const id = artistIdsOf(tables).get(name);
     return id === undefined ? undefined : { id, artist: name };
 }

@@ -7,7 +7,7 @@ import {
     line,
     type CurveFactory,
 } from "d3-shape";
-import type { BelowTopX, LineShape } from "../settings";
+import type { LineShape } from "../settings";
 import {
     UNRANKED,
     valueAt,
@@ -15,7 +15,7 @@ import {
     type DayIndex,
     type StandingsTables,
 } from "../standings";
-import { dailySegments, sCurveSegments, standingLevel, yAlong, type Point } from "./geometry";
+import { dailySegments, sCurveSegments, yAlong, type Point } from "./geometry";
 
 const PALETTE = [
     "#4e79a7",
@@ -55,11 +55,9 @@ const DAILY_CURVES: Record<Exclude<LineShape, "s-curves">, CurveFactory> = {
 export type LinesScale =
     | {
           yAxis: "standing";
-          x: number;
-          below: BelowTopX;
           shape: LineShape;
-          /** The pixel y of a level from 0 (top of the plot) to 1 (bottom). */
-          levelY: (level: number) => number;
+          /** The pixel y of a Standing, as the Timeline or the Spotlight lays Standings out. */
+          standingY: (standing: number) => number;
       }
     | {
           yAxis: "scrobbles";
@@ -92,12 +90,10 @@ function artistY(tables: StandingsTables, scale: LinesScale): ArtistY {
             const scrobbles = tables.cumulative[day * artistCount + artist]!;
             return scrobbles === 0 ? undefined : scale.scrobblesY(scrobbles);
         };
-    const { x, below, levelY } = scale;
+    const { standingY } = scale;
     return (artist) => (day) => {
         const standing = tables.standing[day * artistCount + artist]!;
-        return standing === UNRANKED
-            ? undefined
-            : levelY(standingLevel(standing, x, artistCount, below));
+        return standing === UNRANKED ? undefined : standingY(standing);
     };
 }
 

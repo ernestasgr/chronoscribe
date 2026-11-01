@@ -1,21 +1,28 @@
-import type { ChartOptions } from "../chart";
+import type { ChartMode, ChartOptions } from "../chart";
 import { TOP_X, TopXSize, type ClimbersMode } from "../settings";
 import { climbersCut } from "../standings";
 import { Input, Label, Switch } from "../ui";
 import { OptionSelect, type Choices } from "./fields";
 import { useServices } from "./services";
 
-/** The Top X size and the chart's options, each saved as soon as it is changed. */
+/**
+ * The Top X size and the chart's options, each saved as soon as it is changed. While the
+ * Spotlight is open, only Line shape and hiding the future apply to it; the rest are disabled.
+ */
 export function ChartSettings({
     x,
     mode,
     options,
+    showing,
 }: {
     x: number;
     mode: ClimbersMode;
     options: ChartOptions;
+    /** What the chart card shows: the Timeline, or the Spotlight. */
+    showing: ChartMode["kind"];
 }) {
     const { settings } = useServices();
+    const spotlit = showing === "spotlight";
     const inScrobblesMode = options.yAxis !== "standing";
 
     return (
@@ -28,6 +35,7 @@ export function ChartSettings({
                     min={TOP_X.min}
                     max={TOP_X.max}
                     value={x}
+                    disabled={spotlit}
                     className="w-20"
                     onChange={(e) => {
                         const typed = TopXSize.safeParse(Number(e.target.value));
@@ -51,6 +59,7 @@ export function ChartSettings({
                 label="Y axis"
                 value={options.yAxis}
                 choices={Y_AXIS_CHOICES}
+                disabled={spotlit}
                 onChange={(yAxis) => settings.update({ yAxis })}
             />
             <OptionSelect
@@ -58,7 +67,7 @@ export function ChartSettings({
                 label="Below the Top X"
                 value={options.belowTopX}
                 choices={BELOW_TOP_X_CHOICES}
-                disabled={inScrobblesMode}
+                disabled={inScrobblesMode || spotlit}
                 onChange={(belowTopX) => settings.update({ belowTopX })}
             />
             <OptionSelect
@@ -66,7 +75,7 @@ export function ChartSettings({
                 label="Line shape"
                 value={options.lineShape}
                 choices={LINE_SHAPE_CHOICES}
-                disabled={inScrobblesMode}
+                disabled={inScrobblesMode && !spotlit}
                 onChange={(lineShape) => settings.update({ lineShape })}
             />
             <OptionSelect
@@ -74,6 +83,7 @@ export function ChartSettings({
                 label="Lines drawn"
                 value={options.linesDrawn}
                 choices={LINES_DRAWN_CHOICES}
+                disabled={spotlit}
                 onChange={(linesDrawn) => settings.update({ linesDrawn })}
             />
             <div className="flex items-center gap-2">

@@ -10,6 +10,7 @@ import {
     type HoverEvent,
     type HoverState,
 } from "./hover";
+import { standingLevel } from "./geometry";
 import { linesGeometry, type LinesScale } from "./lines";
 
 const uts = (iso: string) => Date.parse(iso) / 1000;
@@ -42,10 +43,11 @@ describe("lineAt", () => {
     // With X = 3, Standings #1, #2 and #3 sit at about 17, 50 and 83 px.
     const standing: LinesScale = {
         yAxis: "standing",
-        x: 3,
-        below: "slide-off",
         shape: "straight",
-        levelY: scaleLinear().domain([0, 1]).range([0, 100]),
+        standingY: (rank) =>
+            scaleLinear().domain([0, 1]).range([0, 100])(
+                standingLevel(rank, 3, tables.artists.length, "slide-off"),
+            ),
     };
     const frame = frameOf(tables, standing);
 
