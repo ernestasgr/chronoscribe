@@ -33,7 +33,7 @@
             "rules": { "typescript/no-non-null-assertion": "off" }
         },
         {
-            "files": ["**/*.test.ts", "e2e/**", "test-support/**"],
+            "files": ["**/*.test.ts", "e2e/**", "test-support/**", "screenshots/**"],
             "rules": { "typescript/no-non-null-assertion": "off", "eslint/max-lines": "off" }
         }
     ]

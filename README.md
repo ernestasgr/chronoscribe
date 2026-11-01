@@ -4,6 +4,8 @@ Personal data visualizations of last.fm listening histories. Chronoscribe import
 
 It runs entirely in the browser. There is no server: Scrobbles are stored in IndexedDB, and nothing leaves the tab except requests to last.fm (and to Spotify, if you connect it).
 
+![The timeline playing through a year and a half of listening, with the Focus Day's Top 10 beside it](docs/screenshots/timeline.png)
+
 ## Features
 
 - **Import and Sync**: fetch a Listener's whole history from last.fm, pausing and resuming as needed, then Sync recent Scrobbles to pick up late and deleted ones.
@@ -15,6 +17,12 @@ It runs entirely in the browser. There is no server: Scrobbles are stored in Ind
 - **Multiple Listeners**: keep several histories side by side and view them one at a time.
 
 [`GLOSSARY.md`](GLOSSARY.md) defines each of these terms precisely.
+
+| Hover a line for that Day's Track plays                                | Spotlight an Artist among their Neighbours                     |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------- |
+| ![A hovered line's card with its Track plays](docs/screenshots/hovered-line.png) | ![The Spotlight on one Artist with their Neighbours](docs/screenshots/spotlight.png) |
+
+The screenshots show a made-up Listener. `pnpm screenshots` imports that history into the app and takes them again.
 
 ## Getting started
 
@@ -47,15 +55,16 @@ Playback needs a Spotify Premium account and a browser with DRM support. In Deve
 
 ## Scripts
 
-| Command          | What it does                                                    |
-| ---------------- | --------------------------------------------------------------- |
-| `pnpm dev`       | Start the dev server on `http://127.0.0.1:5273`                 |
-| `pnpm build`     | Type-check and build the static site into `dist/`               |
-| `pnpm preview`   | Serve the production build                                      |
-| `pnpm test`      | Run the unit and service tests (Vitest)                         |
-| `pnpm e2e`       | Run the end-to-end tests (Playwright) against faked APIs        |
-| `pnpm check`     | Type-check, lint, check formatting, test and build, as CI does  |
-| `pnpm fmt`       | Format the code (oxfmt)                                         |
+| Command            | What it does                                                   |
+| ------------------ | -------------------------------------------------------------- |
+| `pnpm dev`         | Start the dev server on `http://127.0.0.1:5273`                |
+| `pnpm build`       | Type-check and build the static site into `dist/`              |
+| `pnpm preview`     | Serve the production build                                     |
+| `pnpm test`        | Run the unit and service tests (Vitest)                        |
+| `pnpm e2e`         | Run the end-to-end tests (Playwright) against faked APIs       |
+| `pnpm check`       | Type-check, lint, check formatting, test and build, as CI does |
+| `pnpm screenshots` | Retake the README's screenshots in `docs/screenshots/`         |
+| `pnpm fmt`         | Format the code (oxfmt)                                        |
 
 Before the first `pnpm e2e`, install the browser with `pnpm exec playwright install chromium`. The tests never call the real last.fm or Spotify.
 

@@ -13,6 +13,7 @@
         "fmt:check": "oxfmt --check",
         "test": "vitest run",
         "e2e": "playwright test",
+        "screenshots": "playwright test -c playwright.screenshots.config.ts",
         "check": "pnpm typecheck && pnpm lint && pnpm fmt:check && pnpm test && vite build",
         "prepare": "git config core.hooksPath .githooks"
     },
