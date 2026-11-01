@@ -1,3 +1,4 @@
+import { SpotlightIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ListenerId } from "../db";
 import {
@@ -27,21 +28,37 @@ interface LineCardProps {
 }
 
 /**
- * A hovered line's card: the Artist on the Day, their Daily plays, Standing and cumulative
- * Scrobbles from the tables, then every track they were scrobbled for that Day with its Track plays.
+ * A hovered line's card: the Artist on the Day with an action to spotlight them, their Daily plays,
+ * Standing and cumulative Scrobbles from the tables, then every track they were scrobbled for that
+ * Day with its Track plays.
  */
 export function LineCard({ listenerId, tables, artist, day }: LineCardProps) {
+    const { session } = useServices();
+    const name = tables.artists[artist];
     const plays = dailyPlays(tables, day, artist);
     const standing = valueAt(tables, artist, day, "standing");
 
     return (
         <>
             <header className="grid gap-2 border-b px-4 py-3">
-                <div className="min-w-0">
-                    <h3 className="font-semibold break-words">{tables.artists[artist]}</h3>
-                    <p className="text-xs text-muted-foreground tabular-nums">
-                        {dayDate(tables, day)}
-                    </p>
+                <div className="flex min-w-0 items-start gap-2">
+                    <div className="min-w-0 flex-1">
+                        <h3 className="font-semibold break-words">{name}</h3>
+                        <p className="text-xs text-muted-foreground tabular-nums">
+                            {dayDate(tables, day)}
+                        </p>
+                    </div>
+                    {name !== undefined && (
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="shrink-0"
+                            onClick={() => session.spotlight(name)}
+                        >
+                            <SpotlightIcon />
+                            Spotlight
+                        </Button>
+                    )}
                 </div>
                 <dl className="grid grid-cols-3 gap-2 text-xs">
                     <Stat label="Daily plays" value={plays.toLocaleString("en")} />

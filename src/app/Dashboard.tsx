@@ -1,10 +1,17 @@
 import { SettingsIcon } from "lucide-react";
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { Chart, Minimap, type ChartOptions } from "../chart";
+import { Chart, Minimap, type ChartMode, type ChartOptions } from "../chart";
 import type { ListenerRow } from "../db";
 import type { ClimbersMode } from "../settings";
-import { resolvePins, type DayIndex, type PinnedArtist, type StandingsTables } from "../standings";
+import {
+    artistNamed,
+    resolvePins,
+    type DayIndex,
+    type NamedArtist,
+    type PinnedArtist,
+    type StandingsTables,
+} from "../standings";
 import { useBuild, useFocusDay, useTables, useTimeline } from "../timeline";
 import {
     Alert,
@@ -25,16 +32,22 @@ import { LineCard } from "./LineCard";
 import { ListenerMenu } from "./ListenerMenu";
 import { Pins } from "./Pins";
 import { Player, usePlayerKeys } from "./Player";
-import { useServices, useSettings } from "./services";
+import { useServices, useSession, useSettings } from "./services";
+import { spotlitArtist } from "./session";
 import { SpotifySettings } from "./SpotifySettings";
+import { SpotlightHeader, SpotlightSearch, useSpotlightKeys } from "./Spotlight";
 import { SyncControl } from "./SyncControl";
 
-/** The Dashboard: the toolbar, the chart, and the Focus Day sidebar. */
+/**
+ * The Dashboard: the toolbar, the chart card showing the Timeline or the Spotlight, and the Focus
+ * Day sidebar.
+ */
 export function Dashboard({ listener }: { listener: ListenerRow }) {
     const { username } = listener;
+    const { session } = useServices();
     const tables = useTables();
     const x = useSettings((settings) => settings.x);
-    const mode = useSettings((settings) => settings.climbers);
+    const climbersMode = useSettings((settings) => settings.climbers);
     const options = useSettings(
         useShallow(({ yAxis, belowTopX, lineShape, linesDrawn, hideFuture }): ChartOptions => ({
             yAxis,
@@ -51,6 +64,17 @@ export function Dashboard({ listener }: { listener: ListenerRow }) {
         () => (tables ? resolvePins(tables, listener.pinnedArtists) : []),
         [tables, listener.pinnedArtists],
     );
+    // The Spotlit Artist is looked up by name in each new tables object, as a pin is.
+    const spotlitName = useSession(spotlitArtist);
+    const spotlit = useMemo(
+        () => (tables && spotlitName !== undefined ? artistNamed(tables, spotlitName) : undefined),
+        [tables, spotlitName],
+    );
+    const mode = useMemo<ChartMode>(
+        () => (spotlit ? { kind: "spotlight", artist: spotlit } : { kind: "timeline", pins }),
+        [spotlit, pins],
+    );
+    useSpotlightKeys(session, spotlit !== undefined);
 
     if (!tables) return <Building username={username} />;
 
@@ -61,16 +85,18 @@ export function Dashboard({ listener }: { listener: ListenerRow }) {
                 tables={tables}
                 day={day}
                 x={x}
-                mode={mode}
+                mode={climbersMode}
                 options={options}
                 pins={pins}
+                spotlit={spotlit}
             />
             <Card className="min-h-80 gap-2 overflow-hidden p-2">
+                {spotlit && <SpotlightHeader artist={spotlit} />}
                 <Chart
                     tables={tables}
                     x={x}
                     options={options}
-                    pins={pins}
+                    mode={mode}
                     renderDetails={(line) => (
                         <LineCard
                             listenerId={listener.id}
@@ -82,7 +108,7 @@ export function Dashboard({ listener }: { listener: ListenerRow }) {
                 />
                 <Minimap tables={tables} />
             </Card>
-            <FocusDayPanel tables={tables} day={day} x={x} mode={mode} />
+            <FocusDayPanel tables={tables} day={day} x={x} mode={climbersMode} spotlit={spotlit} />
         </main>
     );
 }
@@ -120,6 +146,7 @@ function Toolbar({
     mode,
     options,
     pins,
+    spotlit,
 }: {
     listener: ListenerRow;
     tables: StandingsTables;
@@ -128,6 +155,7 @@ function Toolbar({
     mode: ClimbersMode;
     options: ChartOptions;
     pins: readonly PinnedArtist[];
+    spotlit: NamedArtist | undefined;
 }) {
     const { seek } = useTimeline();
 
@@ -150,8 +178,14 @@ function Toolbar({
                 />
             </div>
             <Player />
+            <SpotlightSearch tables={tables} day={day} spotlit={spotlit} />
             <Pins listener={listener} tables={tables} day={day} pins={pins} />
-            <ChartSettings x={x} mode={mode} options={options} />
+            <ChartSettings
+                x={x}
+                mode={mode}
+                options={options}
+                showing={spotlit ? "spotlight" : "timeline"}
+            />
             <Collapsible className="contents">
                 <CollapsibleTrigger asChild>
                     <Button variant="outline" size="sm">

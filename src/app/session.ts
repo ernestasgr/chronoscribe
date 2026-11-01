@@ -10,6 +10,7 @@ import {
     type ProbeProblem,
     type ProbeResult,
 } from "../ingest";
+import { artistNamed, type StandingsTables } from "../standings";
 import type { Timeline } from "../timeline";
 import type { Failures } from "./failures";
 import type { Settings } from "./settings";
@@ -37,7 +38,8 @@ export type ApiKeyCheck =
 export type Screen =
     | { kind: "setup"; status: SetupStatus }
     | { kind: "importing"; listenerId: ListenerId; username: string }
-    | { kind: "dashboard"; listenerId: ListenerId };
+    /** The Spotlit Artist is navigation state: named here while the Spotlight is open, never stored. */
+    | { kind: "dashboard"; listenerId: ListenerId; spotlit: string | undefined };
 
 export interface SessionState {
     screen: Screen;
@@ -59,7 +61,11 @@ export type SessionEvent =
     | { type: "jobSettled"; job: Job; listener: ListenerRow | undefined }
     | { type: "listenerChanged"; listener: ListenerRow }
     | { type: "keySubmitted"; apiKey: string }
-    | { type: "keyProbed"; apiKey: string; result: ProbeResult };
+    | { type: "keyProbed"; apiKey: string; result: ProbeResult }
+    | { type: "spotlit"; artist: string }
+    | { type: "spotlightClosed" }
+    /** The timeline swapped in new tables for the viewed Listener. */
+    | { type: "tablesSwapped"; tables: StandingsTables };
 
 const setupScreen = (status: SetupStatus): Screen => ({ kind: "setup", status });
 
@@ -90,10 +96,27 @@ const withoutPin = (pins: readonly string[], artist: string): string[] =>
 const byRecentView = (listeners: readonly ListenerRow[]): ListenerRow[] =>
     listeners.toSorted((a, b) => b.lastViewedAt - a.lastViewedAt);
 
+/** A Listener's dashboard, opening with the Spotlight closed. */
+const dashboardOf = (id: ListenerId): Screen => ({
+    kind: "dashboard",
+    listenerId: id,
+    spotlit: undefined,
+});
+
+/** The dashboard with the Spotlight on `spotlit`, or closed; any other screen is left as it is. */
+const withSpotlit = (screen: Screen, spotlit: string | undefined): Screen =>
+    screen.kind === "dashboard" && screen.spotlit !== spotlit ? { ...screen, spotlit } : screen;
+
+/** Whether the dashboard's Spotlit Artist is gone from `tables`, as an unresolved pin is. */
+const spotlitGone = (screen: Screen, tables: StandingsTables): boolean =>
+    screen.kind === "dashboard" &&
+    screen.spotlit !== undefined &&
+    artistNamed(tables, screen.spotlit) === undefined;
+
 /** A Listener's dashboard once their import has finished, their import's screen until then. */
 const screenOf = (listener: ListenerRow): Screen =>
     listener.importComplete
-        ? { kind: "dashboard", listenerId: listener.id }
+        ? dashboardOf(listener.id)
         : { kind: "importing", listenerId: listener.id, username: listener.username };
 
 /** The Listener a screen is showing, if any. */
@@ -144,13 +167,19 @@ const screenAfter = (screen: Screen, event: SessionEvent): Screen => {
             // A paused import stays behind its screen, which offers to resume it.
             if (job.status === "paused") return screen;
             return job.status === "done" && listener
-                ? { kind: "dashboard", listenerId: listener.id }
+                ? dashboardOf(listener.id)
                 : setupScreen({
                       kind: "rejected",
                       problem: unfinished(job),
                       username: job.username,
                   });
         }
+        case "spotlit":
+            return withSpotlit(screen, event.artist);
+        case "spotlightClosed":
+            return withSpotlit(screen, undefined);
+        case "tablesSwapped":
+            return spotlitGone(screen, event.tables) ? withSpotlit(screen, undefined) : screen;
         case "listenerChanged":
         case "keySubmitted":
         case "keyProbed":
@@ -210,6 +239,10 @@ export function transition(state: SessionState, event: SessionEvent): SessionSta
         ? state
         : { screen, apiKeyCheck, listeners };
 }
+
+/** The Spotlit Artist's name, while the dashboard's Spotlight is open. */
+export const spotlitArtist = ({ screen }: SessionState): string | undefined =>
+    screen.kind === "dashboard" ? screen.spotlit : undefined;
 
 /** The Listener the dashboard shows, looked up among the stored ones. */
 export const viewedListener = ({ screen, listeners }: SessionState): ListenerRow | undefined =>
@@ -381,6 +414,9 @@ export function createSession({
         await reload();
     });
     const stopListening = events.on("jobSettled", ({ job }) => void onJobSettled(job));
+    const stopFollowingTables = timeline.store.subscribe(({ tables }, previous) => {
+        if (tables && tables !== previous.tables) dispatch({ type: "tablesSwapped", tables });
+    });
 
     if (initial?.importComplete) timeline.show(initial);
     byRecentView(listeners)
@@ -505,8 +541,17 @@ export function createSession({
             await reload();
         }),
 
-        /** Stops reacting to settled jobs. */
-        dispose: stopListening,
+        /** Opens the Spotlight on an Artist, by name, in place of any Spotlit Artist before. */
+        spotlight: (artist: string): void => void dispatch({ type: "spotlit", artist }),
+
+        /** Closes the Spotlight, leaving the window and playhead as they are. */
+        closeSpotlight: (): void => void dispatch({ type: "spotlightClosed" }),
+
+        /** Stops reacting to settled jobs and swapped tables. */
+        dispose: () => {
+            stopListening();
+            stopFollowingTables();
+        },
     };
 }
 

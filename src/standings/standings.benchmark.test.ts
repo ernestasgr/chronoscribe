@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { SOUNDTRACK_PICKS } from "../settings";
 import {
+    artistId,
     buildSoundtracks,
     buildStandings,
     climbers,
@@ -9,6 +10,7 @@ import {
     dayIndex,
     dayScrobbles,
     topX,
+    worstStanding,
     type StandingsTables,
 } from ".";
 
@@ -96,5 +98,22 @@ describe("benchmark on a history shaped like the measured one", () => {
         for (let day = 0; day < 100; day++) report(day);
         const days = Array.from({ length: 200 }, (_, i) => Math.floor((i * tables.dayCount) / 200));
         expect(Math.max(...days.map((day) => time(() => report(day))))).toBeLessThan(5);
+    });
+
+    test("a new Spotlit Artist's worst Standings take under 5 ms, then each frame's read under 0.05 ms", () => {
+        const last = dayIndex(tables.dayCount - 1);
+        // Warm up on other Artists, then time the first read for each of a spread of Artists.
+        for (let id = 0; id < 20; id++) worstStanding(tables, artistId(id), last);
+        const artists = Array.from({ length: 50 }, (_, i) => artistId(100 + i * 20));
+        expect(
+            Math.max(...artists.map((id) => time(() => worstStanding(tables, id, last)))),
+        ).toBeLessThan(5);
+        const id = artistId(ARTISTS - 1);
+        worstStanding(tables, id, last);
+        const frames = time(() => {
+            for (let day = 0; day < 1_000; day++)
+                worstStanding(tables, id, dayIndex(day % tables.dayCount));
+        });
+        expect(frames / 1_000).toBeLessThan(0.05);
     });
 });

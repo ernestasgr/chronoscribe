@@ -1,8 +1,7 @@
-import { scaleLinear } from "d3-scale";
 import { select } from "d3-selection";
 import { zoom, zoomIdentity, type ZoomBehavior } from "d3-zoom";
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type RefObject } from "react";
-import { createStore, useStore, type StoreApi } from "zustand";
+import { createStore } from "zustand";
 import type { AppSettings } from "../settings";
 import {
     artistId,
@@ -14,11 +13,21 @@ import {
     type ArtistId,
     type DayIndex,
     type DayWindow,
+    type NamedArtist,
     type PinnedArtist,
     type StandingsTables,
 } from "../standings";
-import { useFocusDay, useTimeline, type Timeline } from "../timeline";
-import { easeToward, GUTTER_TOP, logStandingTicks, spreadLabels, standingLevel } from "./geometry";
+import { useFocusDay, useTimeline, type Timeline, type View } from "../timeline";
+import {
+    levelScale,
+    ScrobblesAxis,
+    scrobblesScale,
+    SpotlightAxis,
+    spotlightY,
+    StandingAxis,
+    type EasedEnd,
+} from "./axes";
+import { easeToward, spreadLabels, standingLevel } from "./geometry";
 import { hoveredLine } from "./hover";
 import { dayScale, plotOf, useSize, type Plot, type Size } from "./layout";
 import {
@@ -38,6 +47,7 @@ import {
     type LineDetails,
     type LineHover,
 } from "./LineHover";
+import { SPOTLIGHT_FLOOR, spotlightBottom } from "./spotlight";
 
 export { Minimap } from "./minimap";
 export type { LineDay, LineDetails } from "./LineHover";
@@ -48,12 +58,23 @@ export type ChartOptions = Pick<
     "yAxis" | "belowTopX" | "lineShape" | "linesDrawn" | "hideFuture"
 >;
 
+/**
+ * What the chart card shows: the Timeline of every drawn Artist and the Pinned Artists, or the
+ * Spotlight on one Artist's Standing alone.
+ */
+export type ChartMode =
+    | { kind: "timeline"; pins: readonly PinnedArtist[] }
+    | { kind: "spotlight"; artist: NamedArtist };
+
+/** Whose lines the painter draws: the Timeline's, dashing the Pinned Artists', or the Spotlit Artist's. */
+type DrawnArtists =
+    | { kind: "timeline"; pinned: readonly ArtistId[] }
+    | { kind: "spotlight"; artist: ArtistId };
+
 /** Half a date label's width, so labels centred on a Day stay inside the chart. */
 const HALF_LABEL = 34;
 /** The fewest Days the window can be zoomed in to. */
 const MIN_WINDOW_DAYS = 14;
-/** The least room a Standing label needs, in pixels. */
-const LABEL_PX = 14;
 /** The height of an Artist label's box, and so the least room between two labels, in pixels. */
 const ARTIST_LABEL_PX = 18;
 /** The room an Artist label needs right of its dot; nearer the edge it flips to the left. */
@@ -62,6 +83,10 @@ const ARTIST_LABEL_ROOM = 160;
 const ARTIST_LABEL_OFFSET = 10;
 /** The padding either side of an Artist's name inside its box. */
 const ARTIST_LABEL_PAD = 5;
+/** A Timeline line's width, and the Spotlit Artist's thicker one. */
+const LINE_WIDTH = 1.8;
+const SPOTLIGHT_LINE_WIDTH = 3;
+const NOT_DASHED: DashedSpans = new Map();
 
 /** Where each Pinned Artist's line is dashed: across each Day from `from` to `to` they're outside the Top X. */
 const dashedSpans = (
@@ -81,11 +106,19 @@ const dashedSpans = (
         ]),
     );
 
-/**
- * The top of the Scrobbles axis as it eases, shared by the canvas loop and the axis labels. It
- * outlives each redraw effect, so a change of X, rule, tables or size eases rather than jumps.
- */
-type ScrobblesTop = StoreApi<{ scrobblesMax: number; easedAt: number | undefined }>;
+/** The ends of the axes that ease: the Scrobbles axis's top and the Spotlight's bottom. */
+interface EasedEnds {
+    scrobblesTop: EasedEnd;
+    standingBottom: EasedEnd;
+}
+
+/** What one frame draws: which lines, on what scale, dashed where and how thick. */
+interface FrameLines {
+    artists: readonly ArtistId[];
+    scale: LinesScale;
+    dashed: DashedSpans;
+    width: number;
+}
 
 /** The overlay parts the per-frame painter moves, which React renders but never positions. */
 interface PaintedParts {
@@ -94,27 +127,24 @@ interface PaintedParts {
     labels: RefObject<SVGGElement | null>;
 }
 
-const levelScale = (plot: Plot) => scaleLinear().domain([0, 1]).range([plot.top, plot.bottom]);
-const scrobblesScale = (plot: Plot, max: number) =>
-    scaleLinear().domain([0, max]).range([plot.bottom, plot.top]);
-
 /**
- * The timeline chart: one line per drawn Artist, by Standing or by cumulative Scrobbles, always
- * including the Pinned Artists. The wheel zooms and dragging pans the time axis only; clicking
- * glides the Focus Day there. Hovering a line while the view is still opens a card of its
- * details, as `renderDetails` renders them, on the Day under the pointer.
+ * The chart, in either mode. The Timeline draws one line per drawn Artist, by Standing or by
+ * cumulative Scrobbles, always including the Pinned Artists; the Spotlight draws the Spotlit
+ * Artist's Standing alone on a log axis fixed to their worst. The wheel zooms and dragging pans
+ * the time axis only; clicking glides the Focus Day there. Hovering a line while the view is still
+ * opens a card of its details, as `renderDetails` renders them, on the Day under the pointer.
  */
 export function Chart({
     tables,
     x,
     options,
-    pins,
+    mode,
     renderDetails,
 }: {
     tables: StandingsTables;
     x: number;
     options: ChartOptions;
-    pins: readonly PinnedArtist[];
+    mode: ChartMode;
     renderDetails: LineDetails;
 }) {
     const figure = useRef<HTMLElement>(null);
@@ -122,28 +152,24 @@ export function Chart({
     const timeAxis = useRef<SVGGElement>(null);
     const marker = useRef<SVGGElement>(null);
     const labels = useRef<SVGGElement>(null);
-    const [scrobblesTop] = useState<ScrobblesTop>(() =>
-        createStore(() => ({ scrobblesMax: 1, easedAt: undefined })),
-    );
+    const [ends] = useState<EasedEnds>(() => ({
+        scrobblesTop: createStore(() => ({ end: 1, easedAt: undefined })),
+        standingBottom: createStore(() => ({ end: SPOTLIGHT_FLOOR, easedAt: undefined })),
+    }));
     const timeline = useTimeline();
     const size = useSize(figure);
     const pixelRatio = devicePixelRatio || 1;
     const paintedParts: PaintedParts = { timeAxis, marker, labels };
-    const pinned = useMemo(() => pins.map(({ id }) => id), [pins]);
+    const drawn = useMemo<DrawnArtists>(
+        () =>
+            mode.kind === "timeline"
+                ? { kind: "timeline", pinned: mode.pins.map(({ id }) => id) }
+                : { kind: "spotlight", artist: mode.artist.id },
+        [mode],
+    );
     const [hover] = useState(createLineHover);
 
-    useFrames(
-        timeline,
-        canvas,
-        paintedParts,
-        tables,
-        x,
-        options,
-        pinned,
-        size,
-        scrobblesTop,
-        hover,
-    );
+    useFrames(timeline, canvas, paintedParts, tables, x, options, drawn, size, ends, hover);
     useTimeZoom(timeline, figure, tables, size);
 
     function focus(event: MouseEvent) {
@@ -160,7 +186,7 @@ export function Chart({
     return (
         <figure
             ref={figure}
-            aria-label="Timeline"
+            aria-label={mode.kind === "spotlight" ? "Spotlight" : "Timeline"}
             onClick={focus}
             {...lineHoverHandlers(hover, timeline)}
             className="relative m-0 min-h-0 flex-1 cursor-crosshair"
@@ -177,8 +203,8 @@ export function Chart({
                     x={x}
                     options={options}
                     size={size}
-                    pins={pins}
-                    scrobblesTop={scrobblesTop}
+                    mode={mode}
+                    ends={ends}
                     paintedParts={paintedParts}
                 />
             )}
@@ -195,8 +221,9 @@ const fittedDay = (playhead: number, from: DayIndex, to: DayIndex): DayIndex =>
  * Paints whenever the view changes, at most once per frame: the lines on the canvas, stopping at
  * the playhead if the future is hidden, then the time axis, the Focus Day marker and the Artist
  * labels riding the lines at the playhead. In Scrobbles mode it keeps painting while the
- * axis eases toward the most Scrobbles drawn up to the playhead. A hovered line is emphasised, and
- * any change to the view or to what is drawn closes its card.
+ * axis eases toward the most Scrobbles drawn up to the playhead, and in the Spotlight while its
+ * bottom eases toward the Spotlit Artist's worst Standing. A hovered line is emphasised, and any
+ * change to the view or to what is drawn closes its card.
  */
 function useFrames(
     { getView, subscribeView }: Timeline,
@@ -205,9 +232,9 @@ function useFrames(
     tables: StandingsTables,
     x: number,
     { yAxis, belowTopX, lineShape, linesDrawn, hideFuture }: ChartOptions,
-    pinned: readonly ArtistId[],
+    drawn: DrawnArtists,
     size: Size | undefined,
-    scrobblesTop: ScrobblesTop,
+    { scrobblesTop, standingBottom }: EasedEnds,
     hover: LineHover,
 ) {
     useEffect(() => {
@@ -217,6 +244,7 @@ function useFrames(
         const dpr = element.width / size.width;
         const plot = plotOf(size);
         const levelY = levelScale(plot);
+        const artistCount = tables.artists.length;
         const last = tables.dayCount - 1;
         let frame: number | undefined;
         // Each name's rendered width, measured once per element since its text never changes.
@@ -238,34 +266,74 @@ function useFrames(
             });
         };
 
-        // This frame's Scrobbles axis top, eased from the last frame's toward `target`.
-        const easeScrobblesTop = (target: number, now: number): number => {
-            const { scrobblesMax, easedAt } = scrobblesTop.getState();
-            const max =
-                easedAt === undefined ? target : easeToward(scrobblesMax, target, now - easedAt);
-            scrobblesTop.setState({ scrobblesMax: max, easedAt: now });
-            if (max !== target) schedule();
-            return max;
+        // This frame's end of an eased axis, eased from the last frame's toward `target`.
+        const ease = (axisEnd: EasedEnd, target: number, now: number): number => {
+            const { end, easedAt } = axisEnd.getState();
+            const eased = easedAt === undefined ? target : easeToward(end, target, now - easedAt);
+            axisEnd.setState({ end: eased, easedAt: now });
+            if (eased !== target) schedule();
+            return eased;
         };
 
         const scaleOf = (artists: readonly ArtistId[], day: DayIndex, now: number): LinesScale =>
             yAxis === "standing"
-                ? { yAxis, x, below: belowTopX, shape: lineShape, levelY }
+                ? {
+                      yAxis,
+                      shape: lineShape,
+                      standingY: (standing) =>
+                          levelY(standingLevel(standing, x, artistCount, belowTopX)),
+                  }
                 : {
                       yAxis,
                       scrobblesY: scrobblesScale(
                           plot,
-                          easeScrobblesTop(Math.max(1, mostScrobbles(tables, artists, day)), now),
+                          ease(scrobblesTop, Math.max(1, mostScrobbles(tables, artists, day)), now),
                       ),
                   };
 
+        // The Timeline's drawn lines, each Pinned Artist's dashed where they're outside the Top X.
+        const timelineLines = (
+            pinned: readonly ArtistId[],
+            { window, playhead }: View,
+            dayX: (day: number) => number,
+            from: DayIndex,
+            to: DayIndex,
+            now: number,
+        ): FrameLines => {
+            const artists = drawnLines(tables, window, x, linesDrawn, pinned);
+            return {
+                artists,
+                scale: scaleOf(artists, fittedDay(playhead, from, to), now),
+                dashed: dashedSpans(tables, pinned, x, dayX, from, to),
+                width: LINE_WIDTH,
+            };
+        };
+
+        // The Spotlit Artist's line alone, on a log axis down to their worst Standing so far.
+        const spotlightLines = (artist: ArtistId, { playhead }: View, now: number): FrameLines => {
+            const bottom = spotlightBottom(tables, artist, { playhead, hideFuture });
+            return {
+                artists: [artist],
+                scale: {
+                    yAxis: "standing",
+                    shape: lineShape,
+                    standingY: spotlightY(plot, ease(standingBottom, bottom, now)),
+                },
+                dashed: NOT_DASHED,
+                width: SPOTLIGHT_LINE_WIDTH,
+            };
+        };
+
         const draw = (now: number) => {
-            const { window, playhead } = getView();
+            const view = getView();
+            const { window, playhead } = view;
             const dayX = dayScale(window, plot);
             const from = dayIndex(Math.max(0, Math.floor(window.start) - 1));
             const to = dayIndex(Math.min(last, Math.ceil(hideFuture ? playhead : window.end) + 1));
-            const artists = drawnLines(tables, window, x, linesDrawn, pinned);
-            const scale = scaleOf(artists, fittedDay(playhead, from, to), now);
+            const { artists, scale, dashed, width } =
+                drawn.kind === "timeline"
+                    ? timelineLines(drawn.pinned, view, dayX, from, to, now)
+                    : spotlightLines(drawn.artist, view, now);
             const playheadX = dayX(playhead);
             const inView = playheadX >= plot.left - 0.5 && playheadX <= plot.right + 0.5;
             context.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -281,9 +349,8 @@ function useFrames(
                 plot.bottom - plot.top + 8,
             );
             context.clip();
-            context.lineWidth = 1.8;
+            context.lineWidth = width;
             const geometry = linesGeometry({ tables, artists, dayX, scale, from, to });
-            const dashed = dashedSpans(tables, pinned, x, dayX, from, to);
             strokeLines(
                 context,
                 geometry,
@@ -305,7 +372,10 @@ function useFrames(
                 });
         };
 
-        if (yAxis === "standing") scrobblesTop.setState({ easedAt: undefined });
+        // An axis end out of use starts afresh when next shown, rather than easing from where it was.
+        if (drawn.kind === "spotlight" || yAxis === "standing")
+            scrobblesTop.setState({ easedAt: undefined });
+        if (drawn.kind === "timeline") standingBottom.setState({ easedAt: undefined });
         hover.dispatch({ type: "dismissed" });
         draw(performance.now());
         const unsubscribe = subscribeView(() => {
@@ -332,9 +402,10 @@ function useFrames(
         lineShape,
         linesDrawn,
         hideFuture,
-        pinned,
+        drawn,
         size,
         scrobblesTop,
+        standingBottom,
         hover,
     ]);
 }
@@ -490,17 +561,17 @@ function Overlay({
     tables,
     x,
     options,
-    pins,
+    mode,
     size,
-    scrobblesTop,
+    ends,
     paintedParts: { timeAxis, marker, labels },
 }: {
     tables: StandingsTables;
     x: number;
     options: ChartOptions;
-    pins: readonly PinnedArtist[];
+    mode: ChartMode;
     size: Size;
-    scrobblesTop: ScrobblesTop;
+    ends: EasedEnds;
     paintedParts: PaintedParts;
 }) {
     const focusDay = useFocusDay();
@@ -512,7 +583,9 @@ function Overlay({
             height={size.height}
             className="pointer-events-none absolute inset-0 text-[11px] text-foreground"
         >
-            {options.yAxis === "standing" ? (
+            {mode.kind === "spotlight" ? (
+                <SpotlightAxis plot={plot} bottom={ends.standingBottom} />
+            ) : options.yAxis === "standing" ? (
                 <StandingAxis
                     artistCount={tables.artists.length}
                     x={x}
@@ -520,7 +593,7 @@ function Overlay({
                     plot={plot}
                 />
             ) : (
-                <ScrobblesAxis plot={plot} scrobblesTop={scrobblesTop} />
+                <ScrobblesAxis plot={plot} top={ends.scrobblesTop} />
             )}
             <g
                 ref={timeAxis}
@@ -547,42 +620,34 @@ function Overlay({
                     {dayDate(tables, focusDay)}
                 </text>
             </g>
-            <ArtistLabels tables={tables} day={focusDay} x={x} pins={pins} group={labels} />
+            <ArtistLabels artists={labelledArtists(tables, focusDay, x, mode)} group={labels} />
         </svg>
     );
 }
 
-/** The Focus Day's Top X, then the Pinned Artists outside it. */
+/** The Spotlit Artist alone, or the Focus Day's Top X and then the Pinned Artists outside it. */
 const labelledArtists = (
     tables: StandingsTables,
     day: DayIndex,
     x: number,
-    pins: readonly PinnedArtist[],
-): PinnedArtist[] => {
+    mode: ChartMode,
+): NamedArtist[] => {
+    if (mode.kind === "spotlight") return [mode.artist];
     const top = topX(tables, day, x);
-    return [...top, ...pins.filter((pin) => !top.some((row) => row.id === pin.id))];
+    return [...top, ...mode.pins.filter((pin) => !top.some((row) => row.id === pin.id))];
 };
 
-/**
- * A dot and a name for each Artist in the Focus Day's Top X and each Pinned Artist, for the
- * painter to put on its line.
- */
+/** A dot and a name for each labelled Artist, for the painter to put on its line. */
 function ArtistLabels({
-    tables,
-    day,
-    x,
-    pins,
+    artists,
     group,
 }: {
-    tables: StandingsTables;
-    day: DayIndex;
-    x: number;
-    pins: readonly PinnedArtist[];
+    artists: readonly NamedArtist[];
     group: RefObject<SVGGElement | null>;
 }) {
     return (
         <g ref={group} role="group" aria-label="Artist labels" className="text-xs font-semibold">
-            {labelledArtists(tables, day, x, pins).map((row) => (
+            {artists.map((row) => (
                 <g key={row.id} data-artist={row.id}>
                     <line stroke={colorOf(row.id)} strokeWidth={1} />
                     <rect
@@ -602,106 +667,6 @@ function ArtistLabels({
                         {row.artist}
                     </text>
                 </g>
-            ))}
-        </g>
-    );
-}
-
-/** The Standings worth a label, each at least `LABEL_PX` below the last one kept. */
-const spacedStandings = (candidates: number[], y: (standing: number) => number): number[] =>
-    candidates.reduce<number[]>((kept, standing) => {
-        const previous = kept.at(-1);
-        return previous === undefined || y(standing) - y(previous) >= LABEL_PX
-            ? [...kept, standing]
-            : kept;
-    }, []);
-
-/** The labels for `rows` evenly spaced Standings, thinned to every n-th when rows are tight. */
-function rowStandings(rows: number, rowHeight: number): number[] {
-    const labelEvery = Math.ceil(LABEL_PX / Math.max(rowHeight, 1));
-    return Array.from({ length: rows }, (_, i) => i + 1).filter(
-        (standing) => standing === 1 || standing % labelEvery === 0,
-    );
-}
-
-/** The Standing labels for each way of showing the Artists below the Top X. */
-function StandingAxis({
-    artistCount,
-    x,
-    below,
-    plot,
-}: {
-    artistCount: number;
-    x: number;
-    below: ChartOptions["belowTopX"];
-    plot: Plot;
-}) {
-    const levelY = levelScale(plot);
-    const y = (standing: number) => levelY(standingLevel(standing, x, artistCount, below));
-    const rowsHeight = (plot.bottom - plot.top) * (below === "gutter" ? GUTTER_TOP : 1);
-    const standings =
-        below === "log"
-            ? spacedStandings(logStandingTicks(artistCount), y)
-            : rowStandings(x, rowsHeight / x);
-    const gutter = below === "gutter" && artistCount > x;
-
-    return (
-        <g role="group" aria-label="Standing axis" className="fill-muted-foreground">
-            {standings.map((standing) => (
-                <text
-                    key={standing}
-                    x={plot.left - 8}
-                    y={y(standing)}
-                    textAnchor="end"
-                    dominantBaseline="middle"
-                >
-                    #{standing}
-                </text>
-            ))}
-            {gutter && (
-                <>
-                    <rect
-                        x={plot.left}
-                        y={levelY(GUTTER_TOP)}
-                        width={plot.right - plot.left}
-                        height={plot.bottom - levelY(GUTTER_TOP)}
-                        className="fill-muted-foreground"
-                        opacity={0.08}
-                    />
-                    <text
-                        x={plot.left - 8}
-                        y={(levelY(GUTTER_TOP) + plot.bottom) / 2}
-                        textAnchor="end"
-                        dominantBaseline="middle"
-                    >
-                        below
-                    </text>
-                </>
-            )}
-        </g>
-    );
-}
-
-/** The cumulative Scrobbles labels, following the axis top as the canvas eases it. */
-function ScrobblesAxis({ plot, scrobblesTop }: { plot: Plot; scrobblesTop: ScrobblesTop }) {
-    const max = useStore(scrobblesTop, (state) => state.scrobblesMax);
-    const scrobblesY = scrobblesScale(plot, max);
-    const ticks = scrobblesY
-        .ticks(Math.max(2, Math.floor((plot.bottom - plot.top) / 40)))
-        .filter((scrobbles) => Number.isInteger(scrobbles) && scrobbles <= max);
-
-    return (
-        <g role="group" aria-label="Scrobbles axis" className="fill-muted-foreground">
-            {ticks.map((scrobbles) => (
-                <text
-                    key={scrobbles}
-                    x={plot.left - 8}
-                    y={scrobblesY(scrobbles)}
-                    textAnchor="end"
-                    dominantBaseline="middle"
-                >
-                    {scrobbles.toLocaleString("en")}
-                </text>
             ))}
         </g>
     );

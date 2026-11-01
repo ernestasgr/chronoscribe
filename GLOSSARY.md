@@ -63,3 +63,11 @@ _Avoid_: Refresh, update
 
 **Pinned Artist**:
 An Artist the Listener has chosen to keep visible on the timeline regardless of whether it is in the Top X.
+
+**Spotlit Artist**:
+The one Artist the Spotlight is about.
+_Avoid_: Selected artist, focus artist
+
+**Spotlight**:
+The chart of the Spotlit Artist's Standing over time, shown in place of the Timeline chart while open.
+_Avoid_: Detail view, artist view
