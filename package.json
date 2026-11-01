@@ -17,6 +17,7 @@
         "prepare": "git config core.hooksPath .githooks"
     },
     "dependencies": {
+        "@tanstack/react-virtual": "3.14.21",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
         "comlink": "^4.4.2",
