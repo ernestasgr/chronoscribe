@@ -30,6 +30,10 @@ The X artists with the best Standings on a given Day, where X is a chart setting
 An artist's Scrobble count within a single Day, not cumulative.
 _Avoid_: Day count, daily scrobbles
 
+**Track plays**:
+A track's Scrobble count within a single Day, by exact last.fm name whatever the album.
+_Avoid_: Track count, song plays
+
 **Daily volume**:
 A Day's Scrobble count across all Artists, as the minimap under the chart draws it.
 _Avoid_: Daily total, activity

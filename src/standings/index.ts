@@ -11,6 +11,7 @@ export {
     type Soundtracks,
     type WindowIndex,
 } from "./soundtracks";
+export { daySpan, trackPlays, type TrackPlays } from "./trackPlays";
 
 /** The Standing stored for an Artist who has no Scrobbles yet on a Day. */
 export const UNRANKED = 0xffff;

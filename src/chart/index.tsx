@@ -19,6 +19,7 @@ import {
 } from "../standings";
 import { useFocusDay, useTimeline, type Timeline } from "../timeline";
 import { easeToward, GUTTER_TOP, logStandingTicks, spreadLabels, standingLevel } from "./geometry";
+import { hoveredLine } from "./hover";
 import { dayScale, plotOf, useSize, type Plot, type Size } from "./layout";
 import {
     colorOf,
@@ -30,8 +31,16 @@ import {
     type LinesGeometry,
     type LinesScale,
 } from "./lines";
+import {
+    createLineHover,
+    LineHoverCard,
+    lineHoverHandlers,
+    type LineDetails,
+    type LineHover,
+} from "./LineHover";
 
 export { Minimap } from "./minimap";
+export type { LineDay, LineDetails } from "./LineHover";
 
 /** The chart settings, all app-wide. */
 export type ChartOptions = Pick<
@@ -92,18 +101,21 @@ const scrobblesScale = (plot: Plot, max: number) =>
 /**
  * The timeline chart: one line per drawn Artist, by Standing or by cumulative Scrobbles, always
  * including the Pinned Artists. The wheel zooms and dragging pans the time axis only; clicking
- * glides the Focus Day there.
+ * glides the Focus Day there. Hovering a line while the view is still opens a card of its
+ * details, as `renderDetails` renders them, on the Day under the pointer.
  */
 export function Chart({
     tables,
     x,
     options,
     pins,
+    renderDetails,
 }: {
     tables: StandingsTables;
     x: number;
     options: ChartOptions;
     pins: readonly PinnedArtist[];
+    renderDetails: LineDetails;
 }) {
     const figure = useRef<HTMLElement>(null);
     const canvas = useRef<HTMLCanvasElement>(null);
@@ -118,12 +130,26 @@ export function Chart({
     const pixelRatio = devicePixelRatio || 1;
     const paintedParts: PaintedParts = { timeAxis, marker, labels };
     const pinned = useMemo(() => pins.map(({ id }) => id), [pins]);
+    const [hover] = useState(createLineHover);
 
-    useFrames(timeline, canvas, paintedParts, tables, x, options, pinned, size, scrobblesTop);
+    useFrames(
+        timeline,
+        canvas,
+        paintedParts,
+        tables,
+        x,
+        options,
+        pinned,
+        size,
+        scrobblesTop,
+        hover,
+    );
     useTimeZoom(timeline, figure, tables, size);
 
     function focus(event: MouseEvent) {
-        if (!size) return;
+        // A click in the hovered line's card, portalled out of the chart, isn't a click on a Day.
+        const inChart = event.target instanceof Node && event.currentTarget.contains(event.target);
+        if (!size || !inChart) return;
         const bounds = event.currentTarget.getBoundingClientRect();
         const { window } = timeline.getView();
         timeline.seek(
@@ -136,6 +162,7 @@ export function Chart({
             ref={figure}
             aria-label="Timeline"
             onClick={focus}
+            {...lineHoverHandlers(hover, timeline)}
             className="relative m-0 min-h-0 flex-1 cursor-crosshair"
         >
             <canvas
@@ -155,6 +182,7 @@ export function Chart({
                     paintedParts={paintedParts}
                 />
             )}
+            <LineHoverCard hover={hover} chart={figure} renderDetails={renderDetails} />
         </figure>
     );
 }
@@ -167,7 +195,8 @@ const fittedDay = (playhead: number, from: DayIndex, to: DayIndex): DayIndex =>
  * Paints whenever the view changes, at most once per frame: the lines on the canvas, stopping at
  * the playhead if the future is hidden, then the time axis, the Focus Day marker and the Artist
  * labels riding the lines at the playhead. In Scrobbles mode it keeps painting while the
- * axis eases toward the most Scrobbles drawn up to the playhead.
+ * axis eases toward the most Scrobbles drawn up to the playhead. A hovered line is emphasised, and
+ * any change to the view or to what is drawn closes its card.
  */
 function useFrames(
     { getView, subscribeView }: Timeline,
@@ -179,6 +208,7 @@ function useFrames(
     pinned: readonly ArtistId[],
     size: Size | undefined,
     scrobblesTop: ScrobblesTop,
+    hover: LineHover,
 ) {
     useEffect(() => {
         const element = canvas.current;
@@ -253,8 +283,16 @@ function useFrames(
             context.clip();
             context.lineWidth = 1.8;
             const geometry = linesGeometry({ tables, artists, dayX, scale, from, to });
-            strokeLines(context, geometry, scale, dashedSpans(tables, pinned, x, dayX, from, to));
+            const dashed = dashedSpans(tables, pinned, x, dayX, from, to);
+            strokeLines(
+                context,
+                geometry,
+                scale,
+                dashed,
+                hoveredLine(hover.store.getState())?.artist,
+            );
             context.restore();
+            hover.painted({ tables, geometry, scale, dayX, plot, right });
             if (timeAxis.current) placeTimeAxis(timeAxis.current, tables, dayX, size);
             if (marker.current) placeMarker(marker.current, playheadX, inView, size);
             if (labels.current)
@@ -268,10 +306,16 @@ function useFrames(
         };
 
         if (yAxis === "standing") scrobblesTop.setState({ easedAt: undefined });
+        hover.dispatch({ type: "dismissed" });
         draw(performance.now());
-        const unsubscribe = subscribeView(schedule);
+        const unsubscribe = subscribeView(() => {
+            hover.dispatch({ type: "dismissed" });
+            schedule();
+        });
+        const unhover = hover.store.subscribe(schedule);
         return () => {
             unsubscribe();
+            unhover();
             if (frame !== undefined) cancelAnimationFrame(frame);
         };
     }, [
@@ -291,6 +335,7 @@ function useFrames(
         pinned,
         size,
         scrobblesTop,
+        hover,
     ]);
 }
 

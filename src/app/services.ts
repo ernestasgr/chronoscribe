@@ -1,6 +1,8 @@
 import { createContext, useContext } from "react";
 import { useStore } from "zustand";
+import type { ListenerId } from "../db";
 import type { AppSettings } from "../settings";
+import type { ArtistId, DayIndex, StandingsTables, TrackPlays } from "../standings";
 import type { Ingest, IngestState } from "../ingest";
 import type { Connection, ConnectionState } from "./connection";
 import type { Failures, FailuresState } from "./failures";
@@ -20,7 +22,16 @@ export interface Services {
     soundtrackPlayer: SoundtrackPlayer | undefined;
     /** The clock that labels counting from now, such as the sync age, read. */
     now: () => number;
+    /** An Artist's Track plays on a Day, read from the Listener's stored Scrobbles. */
+    readTrackPlays: ReadTrackPlays;
 }
+
+export type ReadTrackPlays = (
+    listenerId: ListenerId,
+    tables: StandingsTables,
+    day: DayIndex,
+    artist: ArtistId,
+) => Promise<TrackPlays[]>;
 
 export const ServicesContext = createContext<Services | undefined>(undefined);
 

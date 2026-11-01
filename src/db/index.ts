@@ -27,6 +27,20 @@ export interface ScrobbleRow {
     album: string;
 }
 
+const ScrobbleRowSchema = z.object({
+    listenerId: z.string().transform(listenerId),
+    uts: z.number().transform(unixSeconds),
+    artist: z.string(),
+    track: z.string(),
+    album: z.string(),
+});
+
+/** A stored Scrobble without its row id, or none if malformed. */
+const parseScrobble = (row: unknown): Omit<ScrobbleRow, "id"> | undefined => {
+    const parsed = ScrobbleRowSchema.safeParse(row);
+    return parsed.success ? parsed.data : undefined;
+};
+
 /** The page sizes an import asks last.fm for, largest first. */
 export const PAGE_SIZES = [1000, 200] as const;
 export type PageSize = (typeof PAGE_SIZES)[number];
@@ -222,6 +236,19 @@ export function openDb(name = "chronoscribe") {
 
         countScrobblesOf(id: ListenerId): Promise<number> {
             return scrobblesOf(id).count();
+        },
+
+        /** A Listener's Scrobbles from second `from` through `to`, oldest first, checked as they are read. */
+        async scrobblesBetween(
+            id: ListenerId,
+            from: UnixSeconds,
+            to: UnixSeconds,
+        ): Promise<Omit<ScrobbleRow, "id">[]> {
+            const rows = await dexie.scrobbles
+                .where("[listenerId+uts]")
+                .between([id, from], [id, to], true, true)
+                .toArray();
+            return rows.flatMap((row) => parseScrobble(row) ?? []);
         },
 
         /** A Listener's Scrobbles, oldest first. */

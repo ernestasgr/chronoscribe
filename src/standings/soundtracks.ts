@@ -1,6 +1,7 @@
 import type { SoundtrackPick } from "../settings";
 import type { DayIndex } from ".";
 import { compareNames, dayIndexer, historyDays } from "./days";
+import { byPlays, tally, type Tally } from "./tally";
 
 /** A Window's place in the history: Window n holds Days n·x through n·x + x − 1. */
 export type WindowIndex = number & { readonly brand: "WindowIndex" };
@@ -32,40 +33,7 @@ export interface Soundtracks {
 /** How many tracks a Soundtrack lists, so later steps have fallbacks. */
 const CANDIDATE_TRACKS = 3;
 
-interface Tally<T> {
-    item: T;
-    count: number;
-    /** The second the item reached its count; ties in count go to the earlier one. */
-    reachedAt: number;
-}
-
 type SoundtrackScrobble = { uts: number; artist: string; track: string };
-
-/** Each distinct item's Scrobble count among `scrobbles`, with when it reached that count. */
-function tally<T>(
-    scrobbles: readonly SoundtrackScrobble[],
-    keyOf: (scrobble: SoundtrackScrobble) => string,
-    itemOf: (scrobble: SoundtrackScrobble) => T,
-): Tally<T>[] {
-    // A hot loop over every Scrobble, so it updates the tallies it owns in place.
-    const tallies = new Map<string, Tally<T>>();
-    for (const scrobble of scrobbles) {
-        const key = keyOf(scrobble);
-        const known = tallies.get(key);
-        if (!known) tallies.set(key, { item: itemOf(scrobble), count: 1, reachedAt: scrobble.uts });
-        else {
-            known.count++;
-            known.reachedAt = Math.max(known.reachedAt, scrobble.uts);
-        }
-    }
-    return [...tallies.values()];
-}
-
-/** Orders as Standings do: more Scrobbles first, then whoever reached the count first, then by name. */
-const byPlays =
-    <T>(compareItems: (a: T, b: T) => number) =>
-    (a: Tally<T>, b: Tally<T>): number =>
-        b.count - a.count || a.reachedAt - b.reachedAt || compareItems(a.item, b.item);
 
 /** The `limit` most-played items, best first. */
 const mostPlayed = <T>(

@@ -21,6 +21,7 @@ import {
 import { ChartSettings } from "./ChartSettings";
 import { ApiKeyForm, TimeZoneSelect } from "./fields";
 import { FocusDayPanel } from "./FocusDayPanel";
+import { LineCard } from "./LineCard";
 import { ListenerMenu } from "./ListenerMenu";
 import { Pins } from "./Pins";
 import { Player, usePlayerKeys } from "./Player";
@@ -65,7 +66,20 @@ export function Dashboard({ listener }: { listener: ListenerRow }) {
                 pins={pins}
             />
             <Card className="min-h-80 gap-2 overflow-hidden p-2">
-                <Chart tables={tables} x={x} options={options} pins={pins} />
+                <Chart
+                    tables={tables}
+                    x={x}
+                    options={options}
+                    pins={pins}
+                    renderDetails={(line) => (
+                        <LineCard
+                            listenerId={listener.id}
+                            tables={tables}
+                            artist={line.artist}
+                            day={line.day}
+                        />
+                    )}
+                />
                 <Minimap tables={tables} />
             </Card>
             <FocusDayPanel tables={tables} day={day} x={x} mode={mode} />

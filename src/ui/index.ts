@@ -25,6 +25,7 @@ export {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "./dropdown-menu";
+export { HoverCard, HoverCardContent, HoverCardTrigger } from "./hover-card";
 export { Input } from "./input";
 export { Label } from "./label";
 export { NativeSelect, NativeSelectOption } from "./native-select";
