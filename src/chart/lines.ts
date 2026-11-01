@@ -117,8 +117,8 @@ export function linesGeometry({
 }
 
 /** The dash pattern of a Pinned Artist's line on the Days they are outside the Top X. */
-const PINNED_DASH = [5, 4];
-const SOLID: number[] = [];
+const PINNED_DASH: readonly number[] = [5, 4];
+const SOLID: readonly number[] = [];
 /** Far enough past any canvas edge to stand for "everywhere" in a clip. */
 const EVERYWHERE = 1e6;
 
@@ -192,7 +192,7 @@ export function strokeLines(
               ? curveBumpX
               : DAILY_CURVES[scale.shape];
     const path = line<Point>().curve(curve).context(context);
-    const stroke = (segments: Point[][], dash: number[]) => {
+    const stroke = (segments: Point[][], dash: readonly number[]) => {
         context.setLineDash(dash);
         context.beginPath();
         for (const segment of segments) path(segment);
