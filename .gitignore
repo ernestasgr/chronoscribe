@@ -5,3 +5,4 @@ playwright-report
 .scratch
 .claude/worktrees
 .env*.local
+spike/
