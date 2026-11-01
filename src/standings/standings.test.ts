@@ -11,7 +11,8 @@ import {
     resolvePins,
     searchArtists,
     topX,
-    valueAt,
+    scrobblesAt,
+    standingAt,
     dayIndex,
     type ArtistId,
     type StandingsTables,
@@ -78,14 +79,14 @@ describe("buildStandings", () => {
 
     test("an Artist is unranked before their first Scrobble", () => {
         expect(topX(tables, dayIndex(0), 10).map((row) => row.artist)).not.toContain("Tricky");
-        expect(valueAt(tables, tricky, dayIndex(0), "standing")).toBeUndefined();
-        expect(valueAt(tables, tricky, dayIndex(0), "scrobbles")).toBe(0);
+        expect(standingAt(tables, tricky, dayIndex(0))).toBeUndefined();
+        expect(scrobblesAt(tables, tricky, dayIndex(0))).toBe(0);
     });
 
-    test("valueAt reads an Artist's Standing or cumulative Scrobbles on a Day", () => {
-        expect(valueAt(tables, tricky, dayIndex(1), "standing")).toBe(3);
-        expect(valueAt(tables, tricky, dayIndex(3), "standing")).toBe(3);
-        expect(valueAt(tables, portishead, dayIndex(3), "scrobbles")).toBe(2);
+    test("standingAt and scrobblesAt read an Artist's Standing and cumulative Scrobbles on a Day", () => {
+        expect(standingAt(tables, tricky, dayIndex(1))).toBe(3);
+        expect(standingAt(tables, tricky, dayIndex(3))).toBe(3);
+        expect(scrobblesAt(tables, portishead, dayIndex(3))).toBe(2);
     });
 
     test("Daily plays count an Artist's Scrobbles within one Day", () => {
@@ -282,10 +283,10 @@ describe("Days in the Listener's timezone", () => {
     });
 
     test("Scrobbles land on their local Day across both DST changes", () => {
-        expect(valueAt(tables, air, dayIndex(dayOf("2026-03-07")), "scrobbles")).toBe(1);
-        expect(valueAt(tables, air, dayIndex(dayOf("2026-03-08")), "scrobbles")).toBe(2);
-        expect(valueAt(tables, air, dayIndex(dayOf("2026-10-31")), "scrobbles")).toBe(2);
-        expect(valueAt(tables, air, dayIndex(dayOf("2026-11-01")), "scrobbles")).toBe(4);
+        expect(scrobblesAt(tables, air, dayIndex(dayOf("2026-03-07")))).toBe(1);
+        expect(scrobblesAt(tables, air, dayIndex(dayOf("2026-03-08")))).toBe(2);
+        expect(scrobblesAt(tables, air, dayIndex(dayOf("2026-10-31")))).toBe(2);
+        expect(scrobblesAt(tables, air, dayIndex(dayOf("2026-11-01")))).toBe(4);
     });
 });
 

@@ -9,10 +9,12 @@ import {
 } from "d3-shape";
 import type { LineShape } from "../settings";
 import {
+    asStanding,
+    scrobblesAt,
     UNRANKED,
-    valueAt,
     type ArtistId,
     type DayIndex,
+    type Standing,
     type StandingsTables,
 } from "../standings";
 import { dailySegments, sCurveSegments, yAlong, type Point } from "./geometry";
@@ -57,7 +59,7 @@ export type LinesScale =
           yAxis: "standing";
           shape: LineShape;
           /** The pixel y of a Standing, as the Timeline or the Spotlight lays Standings out. */
-          standingY: (standing: number) => number;
+          standingY: (standing: Standing) => number;
       }
     | {
           yAxis: "scrobbles";
@@ -93,7 +95,7 @@ function artistY(tables: StandingsTables, scale: LinesScale): ArtistY {
     const { standingY } = scale;
     return (artist) => (day) => {
         const standing = tables.standing[day * artistCount + artist]!;
-        return standing === UNRANKED ? undefined : standingY(standing);
+        return standing === UNRANKED ? undefined : standingY(asStanding(standing));
     };
 }
 
@@ -245,8 +247,4 @@ export const mostScrobbles = (
     tables: StandingsTables,
     artists: readonly ArtistId[],
     day: DayIndex,
-): number =>
-    artists.reduce(
-        (most, artist) => Math.max(most, valueAt(tables, artist, day, "scrobbles") ?? 0),
-        0,
-    );
+): number => artists.reduce((most, artist) => Math.max(most, scrobblesAt(tables, artist, day)), 0);

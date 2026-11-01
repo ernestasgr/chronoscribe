@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { UnixSeconds } from "../lastfm";
+import type { Standing } from "../standings";
 import { useServices } from "./services";
 
 /** "1 Scrobble", "1,500 Scrobbles". */
@@ -7,7 +8,7 @@ export const count = (n: number, noun: string) =>
     `${n.toLocaleString("en")} ${noun}${n === 1 ? "" : "s"}`;
 
 /** A Standing as a chip or row shows it: "#3", or "unranked". */
-export const standingLabel = (standing: number | undefined) =>
+export const standingLabel = (standing: Standing | undefined) =>
     standing === undefined ? "unranked" : `#${standing}`;
 
 /** How often labels that count minutes refresh. */

@@ -1,7 +1,7 @@
 import type { ScaleLinear } from "d3-scale";
 import {
     dayIndex,
-    valueAt,
+    standingAt,
     type ArtistId,
     type DayIndex,
     type StandingsTables,
@@ -35,7 +35,7 @@ export interface HitFrame {
 
 /** An Artist's Standing on `day` for breaking ties, unranked last. */
 const tieRank = (tables: StandingsTables, artist: ArtistId, day: DayIndex): number =>
-    valueAt(tables, artist, day, "standing") ?? Number.POSITIVE_INFINITY;
+    standingAt(tables, artist, day) ?? Number.POSITIVE_INFINITY;
 
 /** The Day nearest pixel `x`, kept within the history and left of the lines' right end. */
 function dayNear({ tables, dayX, right }: HitFrame, x: number): DayIndex {

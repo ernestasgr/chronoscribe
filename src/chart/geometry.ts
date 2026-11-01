@@ -1,4 +1,5 @@
 import type { BelowTopX } from "../settings";
+import { asStanding, type Standing } from "../standings";
 
 export type Point = [x: number, y: number];
 
@@ -17,7 +18,7 @@ const GUTTER_SHARE = 0.15;
  * - "log": every Standing on one log scale, from half a row above #1 to half a row below the last.
  */
 export function standingLevel(
-    standing: number,
+    standing: Standing,
     x: number,
     artistCount: number,
     below: BelowTopX,
@@ -199,11 +200,12 @@ export function easeToward(current: number, target: number, elapsed: number): nu
 }
 
 /** The Standings a log axis labels: 1, 2, 5, 10, 20, 50 and so on, then the last Standing. */
-export function logStandingTicks(artistCount: number): number[] {
+export function logStandingTicks(artistCount: number): Standing[] {
     const ticks = Array.from({ length: Math.ceil(Math.log10(artistCount + 1)) }, (_, decade) =>
         [1, 2, 5].map((step) => step * 10 ** decade),
     )
         .flat()
-        .filter((standing) => standing < artistCount);
-    return [...ticks, artistCount];
+        .filter((standing) => standing < artistCount)
+        .map(asStanding);
+    return [...ticks, asStanding(artistCount)];
 }

@@ -1,6 +1,7 @@
 import { scaleLinear } from "d3-scale";
 import { useStore, type StoreApi } from "zustand";
 import type { BelowTopX } from "../settings";
+import { asStanding, type Standing } from "../standings";
 import { GUTTER_TOP, logStandingTicks, standingLevel } from "./geometry";
 import type { Plot } from "./layout";
 import { bandLevel, bandRows, bandStandings, spotlightLevel, spotlightTicks } from "./spotlight";
@@ -25,18 +26,18 @@ export const scrobblesScale = (plot: Plot, max: number) =>
 /** The pixel y of a Standing on the Spotlight's axis, down to `bottom`. */
 export const spotlightY = (plot: Plot, bottom: number) => {
     const levelY = levelScale(plot);
-    return (standing: number) => levelY(spotlightLevel(standing, bottom));
+    return (standing: Standing) => levelY(spotlightLevel(standing, bottom));
 };
 
 /** The pixel y of a Standing in the dynamic Spotlight's band, from `best` down. */
 export const bandY = (plot: Plot, best: number, neighbours: number) => {
     const levelY = levelScale(plot);
-    return (standing: number) => levelY(bandLevel(standing, best, neighbours));
+    return (standing: Standing) => levelY(bandLevel(standing, best, neighbours));
 };
 
 /** The Standings worth a label, each at least `LABEL_PX` below the last one kept. */
-const spacedStandings = (candidates: number[], y: (standing: number) => number): number[] =>
-    candidates.reduce<number[]>((kept, standing) => {
+const spacedStandings = (candidates: Standing[], y: (standing: Standing) => number): Standing[] =>
+    candidates.reduce<Standing[]>((kept, standing) => {
         const previous = kept.at(-1);
         return previous === undefined || y(standing) - y(previous) >= LABEL_PX
             ? [...kept, standing]
@@ -44,9 +45,9 @@ const spacedStandings = (candidates: number[], y: (standing: number) => number):
     }, []);
 
 /** The labels for `rows` evenly spaced Standings, thinned to every n-th when rows are tight. */
-function rowStandings(rows: number, rowHeight: number): number[] {
+function rowStandings(rows: number, rowHeight: number): Standing[] {
     const labelEvery = Math.ceil(LABEL_PX / Math.max(rowHeight, 1));
-    return Array.from({ length: rows }, (_, i) => i + 1).filter(
+    return Array.from({ length: rows }, (_, i) => asStanding(i + 1)).filter(
         (standing) => standing === 1 || standing % labelEvery === 0,
     );
 }
@@ -57,8 +58,8 @@ function StandingLabels({
     y,
     plot,
 }: {
-    standings: number[];
-    y: (standing: number) => number;
+    standings: Standing[];
+    y: (standing: Standing) => number;
     plot: Plot;
 }) {
     return standings.map((standing) => (
@@ -87,7 +88,7 @@ export function StandingAxis({
     plot: Plot;
 }) {
     const levelY = levelScale(plot);
-    const y = (standing: number) => levelY(standingLevel(standing, x, artistCount, below));
+    const y = (standing: Standing) => levelY(standingLevel(standing, x, artistCount, below));
     const rowsHeight = (plot.bottom - plot.top) * (below === "gutter" ? GUTTER_TOP : 1);
     const standings =
         below === "log"

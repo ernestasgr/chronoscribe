@@ -1,4 +1,4 @@
-import type { ClimbersMode, LinesRule, YAxis } from "../settings";
+import type { ClimbersMode, LinesRule } from "../settings";
 import { compareNames, DAY_SECONDS, dayIndexer, historyDays, isoDate } from "./days";
 
 export {
@@ -21,6 +21,12 @@ export type DayIndex = number & { readonly brand: "DayIndex" };
 
 /** Brands a whole number of Days since the tables' first Day. */
 export const dayIndex = (day: number): DayIndex => day as DayIndex;
+
+/** An Artist's 1-based rank on a Day, #1 the most Scrobbled. */
+export type Standing = number & { readonly brand: "Standing" };
+
+/** Brands a 1-based rank; not `standing`, which locals throughout are named. */
+export const asStanding = (rank: number): Standing => rank as Standing;
 
 /** An Artist's index in the tables' `artists`. */
 export type ArtistId = number & { readonly brand: "ArtistId" };
@@ -46,7 +52,7 @@ export interface StandingsTables {
 export interface TopXRow {
     id: ArtistId;
     artist: string;
-    standing: number;
+    standing: Standing;
     cumulative: number;
 }
 
@@ -143,7 +149,7 @@ export function topX(tables: StandingsTables, day: DayIndex, x: number): TopXRow
         rows.push({
             id: artistId(id),
             artist: tables.artists[id]!,
-            standing: rank + 1,
+            standing: asStanding(rank + 1),
             cumulative: tables.cumulative[base + id]!,
         });
     }
@@ -179,8 +185,8 @@ export function rankedCount(tables: StandingsTables, day: DayIndex): number {
 export function rankedBetween(
     tables: StandingsTables,
     day: DayIndex,
-    best: number,
-    worst: number,
+    best: Standing,
+    worst: Standing,
 ): ArtistId[] {
     const first = Math.max(1, best);
     const last = Math.min(worst, rankedCount(tables, day));
@@ -193,9 +199,9 @@ export function rankedBetween(
 export interface Climber {
     id: ArtistId;
     artist: string;
-    standing: number;
+    standing: Standing;
     /** The previous Day's Standing, or undefined for a debut. */
-    previous: number | undefined;
+    previous: Standing | undefined;
     gain: number;
     debut: boolean;
     dailyPlays: number;
@@ -238,8 +244,8 @@ export function climbers(
         rows.push({
             id: artist,
             artist: tables.artists[id]!,
-            standing,
-            previous: debut ? undefined : before,
+            standing: asStanding(standing),
+            previous: debut ? undefined : asStanding(before),
             gain,
             debut,
             dailyPlays: dailyPlays(tables, day, artist),
@@ -343,18 +349,19 @@ function linesOver(
     return [...drawn].toSorted((a, b) => a - b);
 }
 
-/** An Artist's Standing (undefined while unranked) or cumulative Scrobbles at the end of `day`. */
-export function valueAt(
+/** An Artist's Standing at the end of `day`, undefined while unranked. */
+export function standingAt(
     tables: StandingsTables,
     artist: ArtistId,
     day: DayIndex,
-    yAxis: YAxis,
-): number | undefined {
-    const index = day * tables.artists.length + artist;
-    if (yAxis === "scrobbles") return tables.cumulative[index];
-    const standing = tables.standing[index]!;
-    return standing === UNRANKED ? undefined : standing;
+): Standing | undefined {
+    const standing = tables.standing[day * tables.artists.length + artist]!;
+    return standing === UNRANKED ? undefined : asStanding(standing);
 }
+
+/** An Artist's cumulative Scrobbles at the end of `day`, 0 before their first. */
+export const scrobblesAt = (tables: StandingsTables, artist: ArtistId, day: DayIndex): number =>
+    tables.cumulative[day * tables.artists.length + artist] ?? 0;
 
 // The last Artist's worst Standing through each Day for each tables object; 0 before their debut.
 const worstStandingsMemo = new WeakMap<
@@ -383,9 +390,9 @@ export function worstStanding(
     tables: StandingsTables,
     artist: ArtistId,
     through: DayIndex,
-): number | undefined {
+): Standing | undefined {
     const worst = worstStandingsOf(tables, artist)[through] ?? 0;
-    return worst === 0 ? undefined : worst;
+    return worst === 0 ? undefined : asStanding(worst);
 }
 
 /** The runs of Days `from` through `to` on which `artist` is outside the Top X, unranked included. */
@@ -396,8 +403,7 @@ export function daysOutsideTopX(
     from: DayIndex,
     to: DayIndex,
 ): DayWindow[] {
-    const outside = (day: number) =>
-        (valueAt(tables, artist, dayIndex(day), "standing") ?? x + 1) > x;
+    const outside = (day: number) => (standingAt(tables, artist, dayIndex(day)) ?? x + 1) > x;
     return Array.from({ length: Math.max(0, to - from + 1) }, (_, i) => from + i).reduce<
         DayWindow[]
     >((runs, day) => {

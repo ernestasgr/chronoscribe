@@ -1,5 +1,11 @@
 import { describe, expect, test } from "vitest";
-import { artistNamed, buildStandings, dayIndex, type StandingsTables } from "../standings";
+import {
+    artistNamed,
+    asStanding,
+    buildStandings,
+    dayIndex,
+    type StandingsTables,
+} from "../standings";
 import {
     spotlightBand,
     spotlightBottom,
@@ -125,13 +131,13 @@ describe("spotlitLines", () => {
 
 describe("spotlightLevel", () => {
     test("puts #1 near the top and the bottom near the bottom, on a log scale", () => {
-        expect(spotlightLevel(1, 34)).toBeGreaterThan(0);
-        expect(spotlightLevel(1, 34)).toBeLessThan(0.1);
-        expect(spotlightLevel(34, 34)).toBeGreaterThan(0.9);
-        expect(spotlightLevel(34, 34)).toBeLessThan(1);
+        expect(spotlightLevel(asStanding(1), 34)).toBeGreaterThan(0);
+        expect(spotlightLevel(asStanding(1), 34)).toBeLessThan(0.1);
+        expect(spotlightLevel(asStanding(34), 34)).toBeGreaterThan(0.9);
+        expect(spotlightLevel(asStanding(34), 34)).toBeLessThan(1);
         // Each tenfold of Standing takes the same height.
-        expect(spotlightLevel(10, 1000) - spotlightLevel(1, 1000)).toBeCloseTo(
-            spotlightLevel(100, 1000) - spotlightLevel(10, 1000),
-        );
+        expect(
+            spotlightLevel(asStanding(10), 1000) - spotlightLevel(asStanding(1), 1000),
+        ).toBeCloseTo(spotlightLevel(asStanding(100), 1000) - spotlightLevel(asStanding(10), 1000));
     });
 });

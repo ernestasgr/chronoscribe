@@ -1,10 +1,11 @@
 import { describe, expect, test } from "vitest";
 import type { BelowTopX } from "../settings";
+import { asStanding } from "../standings";
 import { dailySegments, sCurveSegments, spreadLabels, standingLevel, yAlong } from "./geometry";
 
 // With X = 10 and 1,000 Artists.
 const levelOf = (below: BelowTopX) => (standing: number) =>
-    standingLevel(standing, 10, 1000, below);
+    standingLevel(asStanding(standing), 10, 1000, below);
 const tenPx = (day: number) => day * 10;
 const twentyPx = (day: number) => day * 20;
 
