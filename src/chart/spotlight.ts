@@ -1,4 +1,13 @@
-import { dayIndex, worstStanding, type ArtistId, type StandingsTables } from "../standings";
+import {
+    dayIndex,
+    rankedBetween,
+    rankedCount,
+    valueAt,
+    worstStanding,
+    type ArtistId,
+    type DayIndex,
+    type StandingsTables,
+} from "../standings";
 import { logStandingTicks } from "./geometry";
 
 /** The lowest the Spotlight's axis ever stops, so an Artist always at #1 still gets an axis. */
@@ -21,6 +30,60 @@ export function spotlightBottom(
         SPOTLIGHT_FLOOR,
         worstStanding(tables, artist, dayIndex(through)) ?? SPOTLIGHT_FLOOR,
     );
+}
+
+/** The Standings the dynamic Spotlight's band shows, from its best to its worst. */
+export interface Band {
+    best: number;
+    worst: number;
+}
+
+/**
+ * The dynamic Spotlight's band on `day`: `neighbours` ranks either side of the Spotlit Artist's
+ * Standing, stopping at #1. Before their debut it centres just below the Day's last ranked Artist,
+ * where they would enter, as a debuting Climber is counted.
+ */
+export function spotlightBand(
+    tables: StandingsTables,
+    artist: ArtistId,
+    day: DayIndex,
+    neighbours: number,
+): Band {
+    const centre = valueAt(tables, artist, day, "standing") ?? rankedCount(tables, day) + 1;
+    const best = Math.max(1, centre - neighbours);
+    return { best, worst: best + 2 * neighbours };
+}
+
+/**
+ * Whose lines the dynamic Spotlight draws on `day`: the Artists inside the band, the Spotlit Artist
+ * and their Neighbours, best Standing first, and the Spotlit Artist last while still unranked.
+ */
+export function spotlitLines(
+    tables: StandingsTables,
+    artist: ArtistId,
+    day: DayIndex,
+    neighbours: number,
+): ArtistId[] {
+    const { best, worst } = spotlightBand(tables, artist, day, neighbours);
+    const inBand = rankedBetween(tables, day, best, worst);
+    return inBand.includes(artist) ? inBand : [...inBand, artist];
+}
+
+/** How many rows the band holds: the Spotlit Artist's and `neighbours` either side. */
+export const bandRows = (neighbours: number): number => 2 * neighbours + 1;
+
+/**
+ * Where a Standing sits in the band, from 0 at the top of the plot to 1 at the bottom, each
+ * Standing centred in its row. `best` may fall between two Standings while the band eases.
+ */
+export const bandLevel = (standing: number, best: number, neighbours: number): number =>
+    (standing - best + 0.5) / bandRows(neighbours);
+
+/** Every Standing whose row centre is inside the band, as the band's axis labels them. */
+export function bandStandings(best: number, neighbours: number): number[] {
+    const first = Math.max(1, Math.ceil(best - 0.5));
+    const last = Math.floor(best - 0.5 + bandRows(neighbours));
+    return Array.from({ length: Math.max(0, last - first + 1) }, (_, i) => first + i);
 }
 
 /** Where a Standing sits on the Spotlight's log axis, from 0 at the top of the plot to 1 at the bottom. */

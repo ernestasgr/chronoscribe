@@ -161,6 +161,35 @@ export function dailyPlays(tables: StandingsTables, day: DayIndex, artist: Artis
 export const dayScrobbles = (tables: StandingsTables, day: DayIndex): number =>
     tables.dailyVolume[day] ?? 0;
 
+/** How many Artists have a Standing on `day`, found by halving since the unranked come last. */
+export function rankedCount(tables: StandingsTables, day: DayIndex): number {
+    const artistCount = tables.artists.length;
+    const base = day * artistCount;
+    let low = 0;
+    let high = artistCount;
+    while (low < high) {
+        const middle = (low + high) >>> 1;
+        if (tables.rankOrder[base + middle] === UNRANKED) high = middle;
+        else low = middle + 1;
+    }
+    return low;
+}
+
+/** The Artists with Standings `best` through `worst` on `day`, best first; ranks nobody holds are skipped. */
+export function rankedBetween(
+    tables: StandingsTables,
+    day: DayIndex,
+    best: number,
+    worst: number,
+): ArtistId[] {
+    const first = Math.max(1, best);
+    const last = Math.min(worst, rankedCount(tables, day));
+    const base = day * tables.artists.length - 1;
+    return Array.from({ length: Math.max(0, last - first + 1) }, (_, i) =>
+        artistId(tables.rankOrder[base + first + i]!),
+    );
+}
+
 export interface Climber {
     id: ArtistId;
     artist: string;
@@ -195,12 +224,7 @@ export function climbers(
     const artistCount = tables.artists.length;
     const base = day * artistCount;
     const previousBase = base - artistCount;
-    let previouslyRanked = 0;
-    while (
-        previouslyRanked < artistCount &&
-        tables.rankOrder[previousBase + previouslyRanked] !== UNRANKED
-    )
-        previouslyRanked++;
+    const previouslyRanked = rankedCount(tables, dayIndex(day - 1));
 
     const rows: Climber[] = [];
     for (let id = 0; id < artistCount; id++) {

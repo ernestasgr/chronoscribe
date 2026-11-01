@@ -1,7 +1,8 @@
 import { SpotlightIcon, XIcon } from "lucide-react";
 import { useEffect } from "react";
+import { SPOTLIGHT_MODES, SpotlightModeChoice, type SpotlightMode } from "../settings";
 import type { DayIndex, NamedArtist, StandingsTables } from "../standings";
-import { Button } from "../ui";
+import { Button, ToggleGroup, ToggleGroupItem } from "../ui";
 import { ArtistSearch } from "./ArtistSearch";
 import { useServices } from "./services";
 import type { Session } from "./session";
@@ -32,13 +33,37 @@ export function SpotlightSearch({
     );
 }
 
-/** The Spotlight's header over the chart: the Spotlit Artist's name and a close control. */
-export function SpotlightHeader({ artist }: { artist: NamedArtist }) {
-    const { session } = useServices();
+/** Each Spotlight mode's name on its toggle. */
+const MODE_NAMES: Record<SpotlightMode, string> = { static: "Static", dynamic: "Dynamic" };
+
+/**
+ * The Spotlight's header over the chart: the Spotlit Artist's name, the Static | Dynamic toggle,
+ * saved app-wide, and a close control.
+ */
+export function SpotlightHeader({ artist, mode }: { artist: NamedArtist; mode: SpotlightMode }) {
+    const { session, settings } = useServices();
     return (
         <header className="flex min-w-0 items-center gap-2 px-2 pt-1">
             <SpotlightIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
             <h2 className="min-w-0 flex-1 truncate font-semibold">{artist.artist}</h2>
+            <ToggleGroup
+                type="single"
+                variant="outline"
+                size="sm"
+                aria-label="Spotlight mode"
+                value={mode}
+                onValueChange={(value) => {
+                    // An empty value is the pressed item clicked again, which keeps the mode.
+                    const chosen = SpotlightModeChoice.safeParse(value);
+                    if (chosen.success) settings.update({ spotlightMode: chosen.data });
+                }}
+            >
+                {SPOTLIGHT_MODES.map((option) => (
+                    <ToggleGroupItem key={option} value={option}>
+                        {MODE_NAMES[option]}
+                    </ToggleGroupItem>
+                ))}
+            </ToggleGroup>
             <Button
                 variant="ghost"
                 size="icon-sm"

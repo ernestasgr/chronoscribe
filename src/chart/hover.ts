@@ -29,6 +29,8 @@ export interface HitFrame {
     plot: Plot;
     /** The rightmost pixel the lines are drawn to: the playhead's when the future is hidden. */
     right: number;
+    /** How far past the plot's top and bottom the lines are drawn, before they are clipped. */
+    overhang: number;
 }
 
 /** An Artist's Standing on `day` for breaking ties, unranked last. */
@@ -43,13 +45,16 @@ function dayNear({ tables, dayX, right }: HitFrame, x: number): DayIndex {
 
 /**
  * The drawn line nearest the pointer at `[x, y]` within `REACH_PX`, on the Day nearest it; equally
- * near lines go to the better Standing. None outside the plot or past the lines' right end.
+ * near lines go to the better Standing. None outside the plot or past the lines' right end, and no
+ * line where it is clipped past the plot's top or bottom.
  */
 export function lineAt(
     frame: HitFrame,
     [x, y]: readonly [number, number],
 ): HoveredLine | undefined {
-    const { tables, geometry, scale, dayX, plot, right } = frame;
+    const { tables, geometry, scale, dayX, plot, right, overhang } = frame;
+    const drawnAt = (lineY: number) =>
+        lineY >= plot.top - overhang && lineY <= plot.bottom + overhang;
     const inPlot =
         x >= plot.left && x <= right && y >= plot.top - REACH_PX && y <= plot.bottom + REACH_PX;
     if (!inPlot) return undefined;
@@ -57,7 +62,10 @@ export function lineAt(
     const nearest = [...geometry.keys()]
         .flatMap((artist) => {
             const lineY = yOnLine(geometry, scale, artist, x);
-            const distance = lineY === undefined ? Number.POSITIVE_INFINITY : Math.abs(lineY - y);
+            const distance =
+                lineY === undefined || !drawnAt(lineY)
+                    ? Number.POSITIVE_INFINITY
+                    : Math.abs(lineY - y);
             return distance <= REACH_PX ? [{ artist, distance, lineY }] : [];
         })
         .toSorted(

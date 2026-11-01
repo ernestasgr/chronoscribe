@@ -149,3 +149,44 @@ test("a Pinned Artist's chip and a Focus Day row open the Spotlight on their Art
     await expect(page.getByRole("heading", { name: "Portishead", exact: true })).toBeVisible();
     await expect.poll(() => labelled(spotlight(page))).toEqual(["Portishead"]);
 });
+
+test("the dynamic Spotlight follows the Spotlit Artist in a band of their Neighbours, and a Neighbour's card moves the Spotlight to them", async ({
+    page,
+}) => {
+    await serveLastfm(page, [deep]);
+    await importListener(page, "Deep");
+    const neighbours = page.getByRole("spinbutton", { name: "Neighbours" });
+    await expect(neighbours).toBeDisabled();
+    await spotlightFromSearch(page, "Late");
+    const mode = page.getByRole("radiogroup", { name: "Spotlight mode" });
+    await expect(mode.getByRole("radio", { name: "Static" })).toBeChecked();
+    await expect(neighbours).toBeDisabled();
+
+    await mode.getByRole("radio", { name: "Dynamic" }).click();
+    await expect(neighbours).toBeEnabled();
+    await neighbours.fill("2");
+    await focusOn(page, "2026-07-02", "2026-07-01");
+
+    // 2 July: Late debuts at #13, under Act 11 and Act 12; nobody is ranked below.
+    await expect
+        .poll(() => axisLabels(spotlight(page)))
+        .toEqual(["#11", "#12", "#13", "#14", "#15"]);
+    await expect.poll(() => labelled(spotlight(page))).toEqual(["Act 11", "Act 12", "Late"]);
+
+    await hoverLineAtFocusDay(spotlight(page), page, "Act 12");
+    await expect(card(page).getByRole("heading", { name: "Act 12" })).toBeVisible();
+    await card(page).getByRole("button", { name: "Spotlight", exact: true }).click();
+
+    await expect(page.getByRole("heading", { name: "Act 12", exact: true })).toBeVisible();
+    await expect(mode.getByRole("radio", { name: "Dynamic" })).toBeChecked();
+    await expect
+        .poll(() => axisLabels(spotlight(page)))
+        .toEqual(["#10", "#11", "#12", "#13", "#14"]);
+    await expect
+        .poll(() => labelled(spotlight(page)))
+        .toEqual(["Act 10", "Act 11", "Act 12", "Late"]);
+
+    await page.reload();
+    await expect(page.getByRole("spinbutton", { name: "Neighbours" })).toHaveValue("2");
+    await expect(page.getByRole("spinbutton", { name: "Neighbours" })).toBeDisabled();
+});

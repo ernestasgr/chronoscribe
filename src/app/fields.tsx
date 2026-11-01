@@ -259,6 +259,7 @@ export function NumberSetting({
     step,
     schema,
     onChange,
+    disabled,
     className,
 }: {
     id?: string;
@@ -270,6 +271,7 @@ export function NumberSetting({
     /** The rule a typed value must pass before it is saved. */
     schema: z.ZodType<number>;
     onChange: (value: number) => void;
+    disabled?: boolean;
     className?: string;
 }) {
     const [draft, setDraft] = useState<string>();
@@ -282,6 +284,7 @@ export function NumberSetting({
             max={max}
             step={step}
             value={draft ?? String(value)}
+            disabled={disabled}
             className={className}
             onChange={(e) => {
                 setDraft(e.target.value);

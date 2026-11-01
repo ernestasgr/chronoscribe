@@ -71,3 +71,7 @@ _Avoid_: Selected artist, focus artist
 **Spotlight**:
 The chart of the Spotlit Artist's Standing over time, shown in place of the Timeline chart while open.
 _Avoid_: Detail view, artist view
+
+**Neighbours**:
+The Artists within N ranks either side of the Spotlit Artist on the Day nearest the playhead, where N is a setting.
+_Avoid_: Surrounding artists, nearby artists

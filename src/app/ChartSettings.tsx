@@ -1,13 +1,14 @@
 import type { ChartMode, ChartOptions } from "../chart";
-import { TOP_X, TopXSize, type ClimbersMode } from "../settings";
+import { NeighbourCount, NEIGHBOURS, TOP_X, TopXSize, type ClimbersMode } from "../settings";
 import { climbersCut } from "../standings";
 import { Input, Label, Switch } from "../ui";
-import { OptionSelect, type Choices } from "./fields";
+import { NumberSetting, OptionSelect, type Choices } from "./fields";
 import { useServices } from "./services";
 
 /**
  * The Top X size and the chart's options, each saved as soon as it is changed. While the
- * Spotlight is open, only Line shape and hiding the future apply to it; the rest are disabled.
+ * Spotlight is open, only Line shape, hiding the future and, in dynamic mode, Neighbours apply to
+ * it; the rest are disabled. Neighbours apply to nothing else.
  */
 export function ChartSettings({
     x,
@@ -93,6 +94,20 @@ export function ChartSettings({
                     onCheckedChange={(hideFuture) => settings.update({ hideFuture })}
                 />
                 <Label htmlFor="hide-future">Hide the future</Label>
+            </div>
+            <div className="flex items-center gap-2">
+                <Label htmlFor="neighbours">Neighbours</Label>
+                <NumberSetting
+                    id="neighbours"
+                    min={NEIGHBOURS.min}
+                    max={NEIGHBOURS.max}
+                    step={1}
+                    schema={NeighbourCount}
+                    value={options.neighbours}
+                    disabled={!spotlit || options.spotlightMode === "static"}
+                    className="w-20"
+                    onChange={(neighbours) => settings.update({ neighbours })}
+                />
             </div>
         </>
     );

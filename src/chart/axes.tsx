@@ -3,14 +3,14 @@ import { useStore, type StoreApi } from "zustand";
 import type { BelowTopX } from "../settings";
 import { GUTTER_TOP, logStandingTicks, standingLevel } from "./geometry";
 import type { Plot } from "./layout";
-import { spotlightLevel, spotlightTicks } from "./spotlight";
+import { bandLevel, bandRows, bandStandings, spotlightLevel, spotlightTicks } from "./spotlight";
 
 /** The least room a Standing label needs, in pixels. */
 const LABEL_PX = 14;
 
 /**
  * An axis end as it eases, shared by the canvas loop and the axis labels: the top of the
- * Scrobbles axis or the bottom of the Spotlight's. It outlives each redraw effect, so a change of
+ * Scrobbles axis, the bottom of the Spotlight's, or the best Standing of the dynamic Spotlight's band. It outlives each redraw effect, so a change of
  * X, rule, tables or size eases rather than jumps.
  */
 export type EasedEnd = StoreApi<{ end: number; easedAt: number | undefined }>;
@@ -26,6 +26,12 @@ export const scrobblesScale = (plot: Plot, max: number) =>
 export const spotlightY = (plot: Plot, bottom: number) => {
     const levelY = levelScale(plot);
     return (standing: number) => levelY(spotlightLevel(standing, bottom));
+};
+
+/** The pixel y of a Standing in the dynamic Spotlight's band, from `best` down. */
+export const bandY = (plot: Plot, best: number, neighbours: number) => {
+    const levelY = levelScale(plot);
+    return (standing: number) => levelY(bandLevel(standing, best, neighbours));
 };
 
 /** The Standings worth a label, each at least `LABEL_PX` below the last one kept. */
@@ -124,6 +130,34 @@ export function SpotlightAxis({ plot, bottom }: { plot: Plot; bottom: EasedEnd }
     return (
         <g role="group" aria-label="Standing axis" className="fill-muted-foreground">
             <StandingLabels standings={spacedStandings(spotlightTicks(end), y)} y={y} plot={plot} />
+        </g>
+    );
+}
+
+/**
+ * The dynamic Spotlight's labels, one for every Standing in the band, following its best as the
+ * canvas eases it. Rows too tight for every label keep every n-th.
+ */
+export function BandAxis({
+    plot,
+    best,
+    neighbours,
+}: {
+    plot: Plot;
+    best: EasedEnd;
+    neighbours: number;
+}) {
+    const end = useStore(best, (state) => state.end);
+    const y = bandY(plot, end, neighbours);
+    const rowHeight = (plot.bottom - plot.top) / bandRows(neighbours);
+    const labelEvery = Math.ceil(LABEL_PX / Math.max(rowHeight, 1));
+    const standings = bandStandings(end, neighbours).filter(
+        (standing) => standing % labelEvery === 0,
+    );
+
+    return (
+        <g role="group" aria-label="Standing axis" className="fill-muted-foreground">
+            <StandingLabels standings={standings} y={y} plot={plot} />
         </g>
     );
 }
